@@ -1,0 +1,23 @@
+# Metadados do alvo — fonte do RANKING.md
+programa: "Nome do Programa"
+plataforma: hackerone          # intigriti | bugcrowd | hackerone | outros
+url: "https://hackerone.com/exemplo"
+slug: nome-do-programa         # kebab-case; deve bater com o nome da pasta
+tipo: "bounty"                 # bounty | vdp | privado
+status: "prospecto"            # prospecto | recon | hunting | pausado | arquivado
+data_inicio: 2026-01-01
+ultima_atividade: 2026-01-01
+escopo_wildcard: true
+faixa_bounty: { low: 100, high: 5000 }
+tags: [web, api]
+
+# Score: cada fator de 1 a 5 (ver fórmula no README.md da raiz)
+score:
+  bounty: 3          # potencial financeiro / faixa de recompensa
+  escopo: 3          # amplitude (wildcards, nº de assets)
+  superficie: 3      # superfície de ataque exposta / facilidade de entrada
+  atividade: 3       # programa ativo, responde e paga rápido
+  familiaridade: 3   # meu domínio da stack / do negócio
+  oportunidade: 3    # pouca concorrência, features novas, escopo recém-ampliado
+
+notas: ""

@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Excalibull ativo. Cérebro: THE-MIND.md. Comandos: CODES.md (code N / protocolo / modo). Board de alvos: code 7 find/send. CHEQUE O ESCOPO PRIMEIRO.\"}}'",
+            "timeout": 5,
+            "statusMessage": "Carregando workspace Excalibull..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/tools/scope_hook.py",
+            "timeout": 5,
+            "statusMessage": "Checando escopo..."
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/tools/file_path_guard.py",
+            "timeout": 3,
+            "statusMessage": "Verificando arquivos referenciados..."
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/tools/cvss_version_guard.py",
+            "timeout": 3,
+            "statusMessage": "Checando versão de CVSS..."
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/tools/validity_guard.py",
+            "timeout": 3,
+            "statusMessage": "Escaneando draft por sinais never-submit..."
+          }
+        ]
+      }
+    ]
+  }
+}

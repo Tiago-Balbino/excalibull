@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+recon_*/
+# NOTA: não use um `*.json` global — ele engoliria .claude/settings.json (config dos hooks).
+# Os JSON de recon/estado já são cobertos por targets/*, recon_*/, reports/ e as regras do brain.
+
+# brain persistente: estado gerado pelo brain.py fica local, só o índice versiona
+brain/targets/
+brain/techniques/
+brain/patterns/
+brain/sessions/
+brain/circuit-breaker.json
+!brain/MEMORY.md
+
+# targets/ é cópia de trabalho — a fonte da verdade é o board knowledge-targets.
+# Ignora tudo, menos o template de estrutura.
+targets/*
+!targets/_TEMPLATE/
+
+# recon cru e evidências por alvo (nunca commitar dado real de caçada aqui)
+reports/
+poc/
+
+.DS_Store
+**/.DS_Store
+.claude/settings.local.json
