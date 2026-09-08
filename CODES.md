@@ -25,6 +25,7 @@ antes de caçar, o cérebro é consultado e roteia (PARTE 3).
 
 | Código | Nome | Resumo |
 |--------|------|--------|
+| `code -1 <alvo>` | Salvar sessão viva | cola cookie/cURL autenticado colado pelo Tiago → grava em scratchpad (fora do repo) |
 | `code 0 <alvo>` | Recon completo | recon + probe + crawl + gf + scan CORS/headers → ficha |
 | `code 1 <alvo>` | Recon passivo | só enumeração passiva, sem tocar no alvo |
 | `code 2 <url>` | Scan alvo único | audita CORS/headers de uma URL |
@@ -39,6 +40,15 @@ antes de caçar, o cérebro é consultado e roteia (PARTE 3).
 | `code 9` | Brain status | visão geral do brain (alvos, exaustos, findings) |
 | `code 10 <report> <status> [--bounty $X]` | Learn | registra o desfecho de uma submissão no brain (alimenta EV futuro) |
 | `code 11 <draft>` | Quality | pontua um rascunho de report antes de submeter (steelman do triager) |
+
+### `code -1 <alvo>` — Salvar sessão viva (evento rápido, fora do repo)
+Quando o Tiago cola uma sessão autenticada (cookie/cURL "Copy as cURL" do DevTools) pra eu usar no `formação de lança`, ela **nunca** vai pro repo — vai só pro scratchpad da sessão de trabalho.
+1. Extrair o cookie/header relevante do que o Tiago colou.
+2. Gravar em `$SCRATCHPAD/<alvo>_session.env` (a pasta scratchpad da sessão atual — fora do projeto, não versionada), `chmod 600`, formato `VARIAVEL='valor'` pra dar `source`.
+3. **Nunca** escrever em `targets/`, `brain/`, `memory/` ou qualquer caminho do repo — só o scratchpad. Se o arquivo já existir pro alvo, sobrescrever (sessão nova substitui a velha).
+4. Confirmar em 1 linha: caminho do arquivo + o que foi extraído (ex.: "cookie de sessão Yahoo, GUID X"). Nunca ecoar o valor bruto de volta no chat depois de salvo.
+5. Toda request feita com essa sessão **ainda** carrega o header/rate exigido pela `scope.md` do alvo (ex. `X-Bug-Bounty`) — a sessão salva não isenta a policy.
+> Guardrail do `file_path_guard`/higiene: se alguma tentativa de escrita com token/cookie literal cair dentro de `targets/`, é a **regra de segurança** (CLAUDE.md) que barra, não este code — `code -1` é a válvula de escape correta pra esse dado.
 
 ### `code 0 <alvo>` — Recon completo
 1. `python3 tools/recon.py <alvo> --all --out targets/<alvo>/recon` (subfinder/amass/httpx/katana/gospider/gau/waybackurls + gf; cai pra Python puro no que faltar).

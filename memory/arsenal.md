@@ -54,6 +54,13 @@ a cada caçada — adicione a classe quando caçá-la.
   igual/sem gate → `PADRÃO DA APLICAÇÃO` (FP). UI **bloqueia** mas o header direto passa → **achado**
   (enforcement só client-side; API permite o que a UI proíbe). Liga P1/P4.
 
+## OSINT — recuperar fluxo de auth via Wayback CDX (SPA/OAuth) — passivo
+- **Sinais:** alvo é SPA (Next.js/`/_next/` etc.) com login via serviço dedicado (`*-auth-service`, `/login`, `/token`); auth é opaca no bundle. Bundle diz "usa IdP X" mas sem confirmar.
+- **Confirmação (100% passiva, sem tocar o alvo):** `curl "https://web.archive.org/cdx/search/cdx?url=<auth-host>/*&output=text&fl=original,timestamp,statuscode&collapse=urlkey&limit=2000"`. Minerar as URLs `/login?...`/`/callback?...` arquivadas: elas frequentemente embutem **o IdP real** (ex.: tenant Auth0 no `iss=`), o **param de redirect** (`referrer_url`/`redirect_uri`/`returnTo`) e o shape do `?code=&state=` (mesmo com codes expirados). Recupera o fluxo OAuth inteiro sem uma request ao alvo.
+- **Escalada:** o param de redirect recuperado vira lead **open-redirect-em-login → leak de code/token** (testar host arbitrário → §12 chain com OAuth). O IdP revelado abre a superfície do IdP (mas cuidado: IdP terceiro/SaaS costuma ser OOS).
+- **FP comuns:** codes/tokens arquivados são single-use e expirados (inúteis como cred viva — não confundir "achei um code no Wayback" com "tenho sessão"). IA fica "Temporarily Offline" intermitente → reprovar. 0 capturas ≠ inexistente.
+- **Fontes:** Internet Archive CDX API. Espelhado em `signals.md` (`S-OSINT-CDX-01`). Caso real: Yahoo Lightyear CMS → Auth0 tenant + lead `referrer_url` (2026-09-08).
+
 ---
 _Adicione uma classe quando caçá-la (auth/sessão, SSRF, SSTI, XSS, upload, race, oauth, graphql,
 llm-ai…). Mantenha o esquema: Sinais · Confirmação · Bypasses · Escalada · FP · Fontes. Espelhe o

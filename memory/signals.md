@@ -62,6 +62,13 @@ o banco. Cada entrada é **greppável** (`grep S-IDOR`, `grep P1`, `grep 🟢`).
 - **Probe:** 🟢 ler o erro e catalogar nomes/valores · 🔴 reenviar o header forjado e ver se muda.
 - **FP:** edge bem configurado strippa tudo; api-key interna inútil se o gateway é interno.
 
+### S-OSINT-CDX-01 — SPA com auth-service dedicado (fluxo recuperável no Wayback)
+- **Sinal:** alvo SPA (`/_next/`, bundle opaco) + host de auth dedicado (`*-auth-service`, `/login`/`/token`); modelo de auth não confirmado só pelo bundle.
+- **Pattern:** P7 (superfície) · **Arsenal:** OSINT — Wayback CDX auth-flow
+- **Hipótese:** URLs `/login?...` arquivadas no Internet Archive vazam o **IdP real** (ex.: tenant Auth0 no `iss=`) + o **param de redirect** (`referrer_url`/`redirect_uri`) + shape do `?code=&state=`.
+- **Probe:** 🟢 CDX API (`web.archive.org/cdx/search/cdx?url=<host>/*`), 100% passivo. Depois 🔴 testar o param de redirect (host arbitrário → leak de code).
+- **FP:** codes arquivados expirados (não são sessão viva); IA intermitente; 0 capturas ≠ inexistente.
+
 ---
 
 # Gatilhos de chain / composição (Pass 2)
