@@ -71,6 +71,13 @@ o banco. Cada entrada é **greppável** (`grep S-IDOR`, `grep P1`, `grep 🟢`).
 
 ---
 
+### S-HMAC-01 — API assinada por HMAC + nonce (sign do body)
+- **Sinal:** doc/wrapper mostra `sign = HMAC-SHA512(secret, body)` + `nonce` monotônico (headers `key`+`sign`); ex. exchanges cripto.
+- **Pattern:** P5 (parser A≠B), P6 (race) · **Arsenal:** API assinada por HMAC
+- **Hipótese:** se assina **bytes crus** → dup-key smuggling / sign-A-send-B; se **canonical(parse)** → morto, sobra só divergência numérica + race do nonce.
+- **Probe:** 🔴 (precisa 1 key) assino-A-envio-B num `/status`: espaço no body, dup-key colapsado, `\uXXXX` em chave; + burst paralelo de nonce idêntico (race) + reuso de nonce cross-endpoint (contador global?).
+- **FP:** servidor canonicaliza antes do HMAC (comum) → C1/smuggle morrem; nonce atômico global → replay morto. Não marcar "exaurido" sem os 4 probes.
+
 # Gatilhos de chain / composição (Pass 2)
 
 ### C-01 — info leak + id previsível → IDOR de leitura

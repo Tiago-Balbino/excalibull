@@ -54,6 +54,26 @@ a cada caçada — adicione a classe quando caçá-la.
   igual/sem gate → `PADRÃO DA APLICAÇÃO` (FP). UI **bloqueia** mas o header direto passa → **achado**
   (enforcement só client-side; API permite o que a UI proíbe). Liga P1/P4.
 
+## API assinada por HMAC — o servidor assina os bytes crus ou o canônico re-parseado?
+- **Contexto:** API com `sign = HMAC(secret, body)` + `nonce`. Se assina os **bytes crus recebidos**,
+  abre dup-key smuggling / sign-A-send-B (validador vê 1ª ocorrência, handler a última). Se
+  **re-parseia e re-serializa canônico** antes do HMAC (e o handler usa o mesmo objeto), não há
+  divergência — a classe inteira morre.
+- **Teste decisivo (probe assino-A-envio-B, barato, num endpoint de leitura tipo `/status`):**
+  1. Assino `{"nonce":T}` **canônico**, **envio** `{"nonce": T }` **com espaços** → **200** ⇒ o servidor
+     canonicaliza (não são os bytes crus). Se fosse bytes crus, o espaço quebraria a assinatura.
+  2. Controle: assino+envio **idêntico com** espaço → **401 failed signature** ⇒ confirma que ele
+     re-serializa sem espaço.
+  3. Dup-key: envio `{"z":"A","z":"B"}`, assino colapsado `{"z":"B"}` → **200**; assino `{"z":"A"}`
+     → **401** ⇒ colapsa **last-wins antes** do check de sign, no mesmo parse do handler.
+  4. Unicode em chave: envio `{"a":1,"a":2}`, assino `{"a":2}` → **200** ⇒ resolve `\uXXXX` no parse.
+- **Sobrevivente:** se canonicaliza, só resta a **divergência numérica** (canonicalizador vs `float()`
+  do handler): `1e-8` vs `"0.00000001"` — testar formas limítrofes num campo de `$`. (No CoinSpot:
+  `amount` string e float ambos normalizam a `1e-05`, sem divergência observável.)
+- **Nonce:** teste se o contador é **global por key** (reusar nonce baixo em outro endpoint/versão →
+  `invalid nonce`?) e se o gate é **atômico** (burst de N requests idênticas em paralelo → quantas 200?
+  >1 = racy → replay/N-execução). CoinSpot: global + atômico (1/30) = sólido.
+
 ## OSINT — recuperar fluxo de auth via Wayback CDX (SPA/OAuth) — passivo
 - **Sinais:** alvo é SPA (Next.js/`/_next/` etc.) com login via serviço dedicado (`*-auth-service`, `/login`, `/token`); auth é opaca no bundle. Bundle diz "usa IdP X" mas sem confirmar.
 - **Confirmação (100% passiva, sem tocar o alvo):** `curl "https://web.archive.org/cdx/search/cdx?url=<auth-host>/*&output=text&fl=original,timestamp,statuscode&collapse=urlkey&limit=2000"`. Minerar as URLs `/login?...`/`/callback?...` arquivadas: elas frequentemente embutem **o IdP real** (ex.: tenant Auth0 no `iss=`), o **param de redirect** (`referrer_url`/`redirect_uri`/`returnTo`) e o shape do `?code=&state=` (mesmo com codes expirados). Recupera o fluxo OAuth inteiro sem uma request ao alvo.

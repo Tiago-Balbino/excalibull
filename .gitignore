@@ -24,3 +24,9 @@ poc/
 .DS_Store
 **/.DS_Store
 .claude/settings.local.json
+
+# cofre de segredos por alvo (keys/cookies vivos). NUNCA versionar. Lido pelas tools via env-var.
+.secrets/
+
+# blob de transporte de segredos (gpg). NUNCA commitar salvo decisão explícita (risco B).
+excalibull-secrets.tar.gz.gpg
