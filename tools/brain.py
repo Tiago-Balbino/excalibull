@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-brain.py — Persistent engagement knowledge base manager.
+brain.py — Write-ahead log local da sessão do Excalibull.
+
+O Hive Mind é a fonte canônica por alvo. Este utilitário mantém estado rápido
+durante a sessão; o conteúdo deve ser destilado, ingerido e verificado no Hive
+antes do Selo de saída.
 
 Initializes, queries, and maintains the Brain's knowledge base
 for the pentest agent suite.
@@ -35,7 +39,7 @@ from file_safety import atomic_write_text, load_json_or_quarantine, locked_file 
 def get_brain_dir() -> Path:
     """Find or create the brain's memory directory.
 
-    Excalibull: o estado persistente vive em `brain/` na raiz do projeto
+    Excalibull: o WAL local vive em `brain/` na raiz do projeto
     (resolvida a partir deste arquivo, então funciona de qualquer CWD).
     `$EXCALIBULL_BRAIN_DIR` sobrescreve se preciso.
     """

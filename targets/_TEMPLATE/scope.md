@@ -1,6 +1,11 @@
 # Escopo — <Nome do Programa>
 
-Fonte: <link da política do programa> · Última conferência: AAAA-MM-DD
+> CACHE INFORMATIVO, NÃO AUTORIZATIVO. Antes de qualquer tráfego, use
+> `hive_get_context` no asset exato. Só `confirmed=true`, `status=authorized` e
+> `action_allowed=true` liberam. Registre o recibo com `hive_scope_cache.py`.
+
+Fonte canônica: Hive `programs/<program_id>/scope.json` aprovado pelo operador.
+Última consulta: AAAA-MM-DD · scope_revision: <hash ou unknown>
 
 ## In scope
 

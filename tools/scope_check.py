@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-scope_check.py — Target scope validation tool for pentest agents.
+scope_check.py — analisador offline de arquivos de escopo legados.
 
-Validates whether a given target (domain, URL, IP, CIDR) is within the
-authorized testing scope. Reads from local scope files and optionally
-from bug bounty platform APIs.
+O resultado e somente diagnostico. No Excalibull Hive-first, autorizacao para
+trafego vem exclusivamente de ``hive_get_context`` e do respectivo recibo
+vigente no ``hive_scope_cache.py``.
 
 Usage:
     python3 scope_check.py <target> [--scope-file PATH] [--program PROGRAM_NAME]
@@ -230,8 +230,9 @@ def load_scope_yaml(path: Path) -> dict:
 def load_scope_md(path: Path) -> dict:
     """Parse a SCOPE.md / scope.md file — extract domains/IPs.
 
-    Aceita tanto bullets (`- foo.com`) quanto TABELAS markdown (o formato do
-    board knowledge-targets, ex.: ``| `*.exemplo.com` | domínio | wildcard |``).
+    Aceita tanto bullets (`- foo.com`) quanto tabelas Markdown legadas, ex.:
+    ``| `*.exemplo.com` | domínio | wildcard |``. O resultado é diagnóstico;
+    autorização operacional vem exclusivamente de ``hive_get_context``.
     Preferência: tokens entre backticks na linha; se não houver, cai pro bullet.
     Um token só entra se parecer host/IP/wildcard/CIDR.
     """

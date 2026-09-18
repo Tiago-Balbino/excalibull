@@ -6,10 +6,10 @@ Lista de tarefas pra executar no futuro. Marque `[x]` ao concluir.
 
 - [ ] **Revisar nomenclaturas e codes** — conferir se os nomes de comando (`code N`,
   `protocolo`, `modo`) e a numeração fazem sentido, estão consistentes e sem colisão.
-  Estado atual: códigos 0–11 (buraco do 5 preenchido com dupcheck); `code 7` = sync do
-  board (send/find/diff), brain brief=8, status=9, learn=10, quality=11. Taxonomia fixada:
+  Estado atual: códigos 0–11; `code 7` = read/publish/status do Hive, brief=8,
+  status=9, learn=10, quality=11. Taxonomia fixada:
   code=evento rápido · protocolo=fluxo ligável/desligável · modo=conjunto de protocolos que
-  muda como o The Mind pensa. Validar se `code 7 send/find` (sub-ação nomeada) e o resto
+  muda como o The Mind pensa. Validar se `code 7 send/find` e o resto
   seguem o padrão, ou se convém reorganizar.
 
 ## Construção do cérebro (pendente do plano de criação)
@@ -22,16 +22,16 @@ Lista de tarefas pra executar no futuro. Marque `[x]` ao concluir.
 - [ ] `tools/` — portar `brain.py` + `file_safety.py` + guards
   (`scope_hook`, `scope_check`, `validity_guard`, `file_path_guard`, `cvss_version_guard`)
   + `seal_gate.py`; criar `.claude/settings.json` (hooks).
-- [ ] `CODES.md` — modelo do sword religado ao brain/rules/hooks/board.
+- [x] `CODES.md` — modelo religado ao Hive/brain/rules/hooks.
 - [ ] `memory/` — `patterns.md` (P1–P8), `arsenal.md`, `signals.md`, `sources.md`, `README.md`.
 - [ ] Passe final — cross-refs, dry-run mental ponta a ponta, `git init` + 1º commit.
 
-## knowledge-targets (board de alvos)
+## Migração Hive Mind
 
-- [ ] Migrar os 20 alvos do `sword-initial/targets/` pro board (tudo, incl. recon cru).
-- [ ] Marcar a regra de OpSec do board como **EM REVISÃO** e relaxar o `.gitignore` dele.
-- [ ] `tools/kb_sync.py` (`code 7 send/find`) + padronizar `targets/_TEMPLATE/`.
-- [ ] Regenerar `RANKING.md` do board após a migração.
+- [x] Remover o board do runtime; Hive é a única fonte canônica por alvo.
+- [x] Tornar o hook de escopo fail-closed com recibo de `hive_get_context`.
+- [x] Adaptar `code 7`, Hunter, Selo, docs e templates.
+- [ ] Migrar qualquer conteúdo legado restante para `programs/<program_id>/` no Hive e validar por read-back.
 
 ## Backlog — lacunas vs pentest-agents (trazer em iterações futuras)
 
@@ -57,4 +57,9 @@ pentest-agents ficaram de fora por escopo. Ordem por valor pro fluxo:
 
 ## Ideias / backlog
 
+- [ ] **Corrigir auto-load do cofre (`.secrets/autoload.sh`)** — a var não carrega
+  automático na Bash tool: o guard por `$PWD` no `autoload.sh` não bate porque o `~/.zshrc`
+  parece ser sourceado antes de o shell estar no dir do projeto (`BUGCROWD_USERNAME` sai
+  vazio). Investigar PWD no source-time; opções: remover o guard de `$PWD`, casar por
+  `$CLAUDE_PROJECT_DIR`, ou usar hook `chpwd` do zsh. Gatilho já está no `~/.zshrc:111`.
 - [ ] (adicione aqui conforme surgirem)

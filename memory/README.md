@@ -1,9 +1,9 @@
 # memory/ — Banco de conhecimento distilado
 
 Corpus de write-ups **distilados** (não copiados) para identificar padrões recorrentes de
-vulnerabilidade. Conhecimento **transversal a alvos** (o estado por alvo vive no `brain/`; a
-ficha canônica no board `knowledge-targets`). Consulte no início de toda caçada; alimente ao
-aprender algo novo (`modo hunter`/`modo dojo`).
+vulnerabilidade. Conhecimento **transversal a alvos**. Conteúdo específico de programa vive
+canonicamente no Hive; `brain/` é apenas WAL local. Consulte no início de toda caçada e
+alimente ao aprender uma técnica realmente generalizável.
 
 ## Organização
 - `patterns.md` — **o coração**: os 8 padrões meta (P1–P8), ligados às 6 perguntas do [[THE-MIND]].
@@ -12,13 +12,16 @@ aprender algo novo (`modo hunter`/`modo dojo`).
   que o `code 6` varre contra o recon.
 - `<classe>.md` — write-ups distilados por classe (crie conforme caçar; ex.: `broken-access-control.md`).
 - `sources.md` — feeds/repositórios pra continuar minerando.
+- `hive-first-source-of-truth.md` — decisão arquitetural e invariantes.
+- `hive-ingest-flow.md` — runbook de consulta, publicação e verificação.
 - `dojo-log.md` — log do `modo dojo` (write-ups distilados + fila de revisão espaçada). Criado no 1º dojo.
 
 ## Relação com o resto
 - `memory/` = conhecimento genérico (padrões, técnicas). Cresce devagar, curado.
 - `rules/` = regras de referência sempre-ativas (never-submit, chain-table, payloads…). O `memory/`
   aponta pra elas; não duplique.
-- `brain/` = estado por alvo (o que testei/exauri). Gerido por `tools/brain.py`.
+- Hive Mind = estado canônico por alvo.
+- `brain/` = WAL da sessão, reconciliado no Hive antes do fechamento.
 
 ## Esquema de cada entrada (mantenha consistente pra padrões emergirem)
 ```

@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""
-scope_hook.py — hook PreToolUse (Bash) do Excalibull.
+"""Hook PreToolUse (Bash) com autoridade de escopo exclusiva do Hive Mind.
 
-Bloqueia comandos que referenciam hosts FORA DE ESCOPO. Agrega o escopo de
-todas as fichas de alvo (`targets/<alvo>/scope.md` / `scope.yaml` / `.scope.txt`)
-mais qualquer arquivo de escopo na raiz do projeto, e reusa a lógica de matching
-do scope_check.py (wildcard/exato/CIDR, não substring).
-
-Comportamento: só BLOQUEIA host que casa uma regra OUT_OF_SCOPE explícita. Host
-desconhecido passa (o hook é guarda contra OOS conhecido, não allowlist). Sem
-nenhum escopo definido → não bloqueia nada.
+Todo host HTTP(S) precisa de um recibo recente produzido a partir da resposta
+estruturada de ``hive_get_context``. Escopo local em ``targets/`` nunca autoriza
+tráfego. Ausência, expiração, ``unknown`` e ``out_of_scope`` falham fechados.
 
 Chamado por .claude/settings.json PreToolUse.Bash.
 Stdin: JSON do evento de hook. Stdout: vazio (permite) ou {"decision":"block"}.
@@ -19,7 +13,9 @@ Exit code: sempre 0 (o bloqueio é sinalizado via stdout JSON).
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -27,18 +23,13 @@ HOOK_DIR = Path(__file__).resolve().parent
 if str(HOOK_DIR) not in sys.path:
     sys.path.insert(0, str(HOOK_DIR))
 
-from scope_check import (  # noqa: E402
-    check_scope,
-    find_scope_file,
-    load_scope_md,
-    load_scope_txt,
-    load_scope_yaml,
-)
-
-PROJECT_ROOT = HOOK_DIR.parent
-TARGETS_DIR = PROJECT_ROOT / "targets"
+from hive_scope_cache import authorization_for  # noqa: E402
 
 _URL_RE = re.compile(r"https?://([A-Za-z0-9.\-]+)(?::\d+)?", re.IGNORECASE)
+_HOST_RE = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})\.)+[A-Za-z]{2,63}(?::\d+)?$|^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$"
+)
+_FILE_SUFFIXES = (".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".csv", ".log")
 
 
 def read_payload() -> dict | None:
@@ -62,56 +53,30 @@ def extract_hosts(command: str) -> list[str]:
         if host and host not in seen:
             seen.add(host)
             hosts.append(host)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for raw in tokens:
+        token = raw.split("=", 1)[-1].strip("'\"[](),;")
+        if "://" in token or "/" in token or token.lower().endswith(_FILE_SUFFIXES):
+            continue
+        if not _HOST_RE.fullmatch(token):
+            continue
+        host = token.rsplit(":", 1)[0].rstrip(".").lower()
+        if host not in seen:
+            seen.add(host)
+            hosts.append(host)
     return hosts
 
 
-def _load_one(path: Path) -> dict | None:
+def _is_loopback(host: str) -> bool:
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
     try:
-        suf = path.suffix.lower()
-        if suf in (".yaml", ".yml"):
-            return load_scope_yaml(path)
-        if suf == ".md":
-            return load_scope_md(path)
-        return load_scope_txt(path)
-    except Exception:
-        return None
-
-
-def load_aggregate_scope() -> dict | None:
-    """Junta o escopo da raiz + de cada targets/<alvo>/scope.*.
-
-    Retorna um dict {in_scope, out_of_scope, source} agregado, ou None se
-    nenhum arquivo de escopo existir.
-    """
-    in_scope: list[str] = []
-    out_of_scope: list[str] = []
-    sources: list[str] = []
-
-    root = find_scope_file(PROJECT_ROOT)
-    if root and not root.get("placeholder"):
-        in_scope += root.get("in_scope", [])
-        out_of_scope += root.get("out_of_scope", [])
-        sources.append(root.get("source", "root"))
-
-    if TARGETS_DIR.is_dir():
-        for name in ("scope.md", "scope.yaml", "scope.yml", ".scope.txt", "scope.txt"):
-            for path in sorted(TARGETS_DIR.glob(f"*/{name}")):
-                if path.parent.name.startswith("_"):
-                    continue  # pula _TEMPLATE e afins
-                sc = _load_one(path)
-                if not sc or sc.get("placeholder"):
-                    continue
-                in_scope += sc.get("in_scope", [])
-                out_of_scope += sc.get("out_of_scope", [])
-                sources.append(sc.get("source", str(path)))
-
-    if not in_scope and not out_of_scope:
-        return None
-    return {
-        "in_scope": in_scope,
-        "out_of_scope": out_of_scope,
-        "source": "; ".join(sources) if sources else "excalibull scope",
-    }
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def main() -> int:
@@ -126,20 +91,18 @@ def main() -> int:
     if not hosts:
         return 0
 
-    scope = load_aggregate_scope()
-    if scope is None:
-        return 0
-
     for host in hosts:
-        verdict = check_scope(host, scope)
-        if verdict.get("status") == "OUT_OF_SCOPE":
-            rule = verdict.get("matched_rule") or host
-            source = verdict.get("source", "scope file")
+        if _is_loopback(host):
+            continue
+        receipt = authorization_for(host)
+        if not receipt or receipt.get("action_allowed") is not True:
+            detail = "sem recibo vigente" if not receipt else f"status={receipt.get('status')}"
             reason = (
-                f"BLOQUEADO: {host} está FORA DE ESCOPO "
-                f"(regra: {rule}, fonte: {source}). "
-                "Se for falso positivo, revise o scope.md do alvo — "
-                "regras wildcard/exatas são avaliadas, não substrings."
+                f"BLOQUEADO (Hive fail-closed): {host} {detail}. "
+                "Chame hive_get_context com program_id e asset exato; prossiga somente se "
+                "scope.confirmed=true e action_allowed=true. Salve o JSON estruturado e rode "
+                "`python3 tools/hive_scope_cache.py record <arquivo.json>`. "
+                "Scope local em targets/ nao concede autorizacao."
             )
             sys.stdout.write(json.dumps({"decision": "block", "reason": reason}))
             return 0

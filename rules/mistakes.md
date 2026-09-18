@@ -23,7 +23,7 @@ report, ou perdeu bug. **Target-agnóstico.** Leia no início de todo hunt e no 
 - **Piso de gate não é trabalho.** Marcador `coverage-<classe>` sem evidência real = rejeitado. Floor de wall-clock que passa via `sleep` = inválido. Inferência entre regiões (§9) = rejeitada.
 - **Escreva no disco; não alucine paths.** Todo artefato citado num report é persistido com `Write` num path determinístico; `ls` pra confirmar. Subagente que alega sucesso ecoa o `ls`.
 - **Não chame "CONFIRMADO" sem PoC contra o alvo vivo.** Entradas de brain de anomalia de probe usam status `LEAD`, nunca `CONFIRMED`, até um teste de 2 contas ou before/after reproduzir dano real.
-- **Leia memória/brain/`.env` antes de perguntar ao Tiago.** Re-pedir credencial/token/estado que você mesmo escreveu na memória desperdiça tempo. Valor stale → atualize, não peça replay.
+- **Consulte o Hive e depois o WAL/scratch antes de perguntar ao Tiago.** Re-pedir estado já publicado desperdiça tempo. Credencial/token nunca vai ao Hive ou ao brain: fica apenas no scratchpad privado; se stale, peça uma sessão nova sem ecoar o valor.
 - **Corrigido → audite as próximas 3 ações contra a correção.** Erro sinalizado 2× no mesmo tema → pare e pergunte. Não diga "vou lembrar" e repita em 5 turnos.
 - **Rankeie quando pedirem, não liste.** "Qual o mais forte?" espera lista ordenada (1/2/3) + 1 linha de porquê + 1 ação recomendada.
 - **Nunca placeholder quando o valor real está a 1 arquivo.** `researcher`/`YOUR_USERNAME` em campo exigido pela policy = violação. Carregue de `policy`/`scope`/`CLAUDE.md` ou PARE e pergunte.

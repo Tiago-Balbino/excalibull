@@ -5,7 +5,7 @@ Este arquivo é a **fonte da verdade** dos comandos. **Tudo passa pelo [[THE-MIN
 antes de caçar, o cérebro é consultado e roteia (PARTE 3).
 
 - **Códigos** (`code N`) — **eventos rápidos**: executam uma ação e acabam (uma tacada).
-  Ex.: `code 7 send` envia os dados do alvo pro board de conhecimento.
+  Ex.: `code 7 send` publica o handoff da sessão no Hive Mind.
 - **Protocolos** (`protocolo <nome>`) — **fluxos/funcionalidades nomeados que podem ser
   ligados ou desligados**. Uns rodam uma vez com um objetivo (ex.: `contra-prova`, `report`);
   outros ficam **vivos** enquanto ligados (ex.: `armar a arapuca` = inventário contínuo,
@@ -15,9 +15,9 @@ antes de caçar, o cérebro é consultado e roteia (PARTE 3).
   postura (ex.: `modo hunter` compõe contra-prova + escala + lança; `postura escudo` muda o
   que é permitido tocar).
 
-> **Regra de ouro:** só recon/scan/PoC em alvos **autorizados** (escopo do programa). Na dúvida,
-> perguntar antes de disparar. Humano sempre submete. O hook `tools/scope_hook.py` bloqueia
-> comando contra host fora de escopo automaticamente.
+> **Regra de ouro:** nenhum arquivo local autoriza tráfego. Antes de tocar no ativo, chamar
+> `hive_get_context`; só `confirmed=true`, `status=authorized` e `action_allowed=true` liberam.
+> `unknown` ou ausência falham fechados. Humano sempre submete.
 
 ---
 
@@ -26,18 +26,18 @@ antes de caçar, o cérebro é consultado e roteia (PARTE 3).
 | Código | Nome | Resumo |
 |--------|------|--------|
 | `code -1 <alvo>` | Salvar sessão viva | cola cookie/cURL autenticado colado pelo Tiago → grava em scratchpad (fora do repo) |
-| `code 0 <alvo>` | Recon completo | recon + probe + crawl + gf + scan CORS/headers → ficha |
-| `code 1 <alvo>` | Recon passivo | só enumeração passiva, sem tocar no alvo |
-| `code 2 <url>` | Scan alvo único | audita CORS/headers de uma URL |
-| `code 3 <alvo>` | Nova ficha | cria `targets/<alvo>/` no formato do board |
+| `code 0 <program> <asset>` | Recon completo | consulta Hive → confirma escopo → recon em scratch → publica síntese |
+| `code 1 <program> <asset>` | Recon passivo | consulta Hive antes da enumeração passiva e publica o delta |
+| `code 2 <program> <url>` | Scan alvo único | confirma o asset no Hive e audita CORS/headers |
+| `code 3 <program>` | Programa novo | prepara scratch/nota; scope canônico só pelo operador |
 | `code 4 "<decisão>"` | Registrar decisão | adiciona bloco no [[THE-MIND]] (log) |
-| `code 5 <vuln> [alvo]` | Dupcheck | checa se a vuln já foi reportada (local + hacktivity) antes de gastar tempo |
-| `code 6 <alvo>` | Gerar hipóteses | casa recon × `memory/signals.md` + `rules/chain-table.md` → leads `[UNTESTED]` |
-| `code 7 send <alvo>` | Sync → board | envia `targets/<alvo>/` → `knowledge-targets/<plataforma>/<slug>/` |
-| `code 7 find <alvo>` | Sync ← board | busca `knowledge-targets/<plataforma>/<slug>/` → `targets/<alvo>/` |
-| `code 7` | Diff board | lista/diffa board × `targets/` local |
-| `code 8 <alvo>` | Brain brief | pre-flight: o que já foi testado/exausto no alvo |
-| `code 9` | Brain status | visão geral do brain (alvos, exaustos, findings) |
+| `code 5 <program> <vuln>` | Dupcheck | Hive primeiro; depois brain local e hacktivity pública |
+| `code 6 <program>` | Gerar hipóteses | casa Hive + scratch × memória transversal → leads `[UNTESTED]` |
+| `code 7 send <program>` | Publish → Hive | nota focada → ingestão → fila idle → read-back |
+| `code 7 find <program> [asset]` | Read ← Hive | contexto ao vivo; nunca cria fork local |
+| `code 7` | Hive status/catalog | status MCP + catálogo explícito de `program_id` |
+| `code 8 <program>` | Brief | Hive primeiro + WAL local (`brain.py brief`) |
+| `code 9` | Status | `get_sync_status` + visão do brain local |
 | `code 10 <report> <status> [--bounty $X]` | Learn | registra o desfecho de uma submissão no brain (alimenta EV futuro) |
 | `code 11 <draft>` | Quality | pontua um rascunho de report antes de submeter (steelman do triager) |
 
@@ -45,70 +45,68 @@ antes de caçar, o cérebro é consultado e roteia (PARTE 3).
 Quando o Tiago cola uma sessão autenticada (cookie/cURL "Copy as cURL" do DevTools) pra eu usar no `formação de lança`, ela **nunca** vai pro repo — vai só pro scratchpad da sessão de trabalho.
 1. Extrair o cookie/header relevante do que o Tiago colou.
 2. Gravar em `$SCRATCHPAD/<alvo>_session.env` (a pasta scratchpad da sessão atual — fora do projeto, não versionada), `chmod 600`, formato `VARIAVEL='valor'` pra dar `source`.
-3. **Nunca** escrever em `targets/`, `brain/`, `memory/` ou qualquer caminho do repo — só o scratchpad. Se o arquivo já existir pro alvo, sobrescrever (sessão nova substitui a velha).
+3. **Nunca** escrever credenciais em `targets/`, `brain/`, `memory/`, Hive ou qualquer caminho do repo — só no scratchpad privado. Se já existir, substituir pela sessão nova.
 4. Confirmar em 1 linha: caminho do arquivo + o que foi extraído (ex.: "cookie de sessão Yahoo, GUID X"). Nunca ecoar o valor bruto de volta no chat depois de salvo.
-5. Toda request feita com essa sessão **ainda** carrega o header/rate exigido pela `scope.md` do alvo (ex. `X-Bug-Bounty`) — a sessão salva não isenta a policy.
+5. Toda request feita com essa sessão ainda carrega header/rate recuperado do Hive — a sessão salva não isenta policy nem nova confirmação do asset.
 > Guardrail do `file_path_guard`/higiene: se alguma tentativa de escrita com token/cookie literal cair dentro de `targets/`, é a **regra de segurança** (CLAUDE.md) que barra, não este code — `code -1` é a válvula de escape correta pra esse dado.
 
-### `code 0 <alvo>` — Recon completo
-1. `python3 tools/recon.py <alvo> --all --out targets/<alvo>/recon` (subfinder/amass/httpx/katana/gospider/gau/waybackurls + gf; cai pra Python puro no que faltar).
-2. `python3 tools/cors_headers_scan.py -f targets/<alvo>/recon/live-hosts.txt --json targets/<alvo>/recon/cors.json`.
-3. Atualizar `targets/<alvo>/README.md` (ficha) + `recon/notes.md`/`tech.md` resumindo hosts vivos, buckets do gf e destaques.
-4. Resumo curto no chat.
-> `scope_hook` roda antes de cada request; se um host cair fora de escopo, o comando é bloqueado.
+### `code 0 <program> <asset>` — Recon completo
+1. `hive_search` pelo asset, recon anterior, regras e negativos; não repetir trabalho.
+2. `hive_get_context` no asset exato e cachear o veredito para o hook.
+3. `python3 tools/recon.py <asset> --all --out targets/<program>/recon` e scanners complementares.
+4. Manter bruto no scratch; destilar delta, endpoints e negativos em handoff Hive com `asset_refs`.
+5. `code 7 send <program>` publica e verifica. O hook bloqueia ausência/expiração de autorização.
 
-### `code 1 <alvo>` — Recon passivo
-- `python3 tools/recon.py <alvo> --out targets/<alvo>/recon` (sem probe/crawl). Só fontes de terceiros.
+### `code 1 <program> <asset>` — Recon passivo
+- Consultar o Hive primeiro; rodar `recon.py` sem probe/crawl em `targets/<program>/recon`; publicar apenas o delta útil.
 
-### `code 2 <url>` — Scan alvo único
-- `python3 tools/cors_headers_scan.py <url> --json targets/<host>/recon/cors.json`.
+### `code 2 <program> <url>` — Scan alvo único
+- Confirmar o host por `hive_get_context`, cachear o recibo e rodar `cors_headers_scan.py` em scratch; publicar resultado positivo ou negativo.
 
-### `code 3 <alvo>` — Nova ficha de alvo
-- Copiar `targets/_TEMPLATE/` → `targets/<alvo>/` e preencher `target.yml` (plataforma+slug+score),
-  `README.md` (ficha) e `scope.md`. Versão manual/rápida do `protocolo casa-nova`. Depois, `code 7 send`
-  registra no board.
+### `code 3 <program>` — Programa novo
+- Validar o `program_id`; criar scratch a partir de `targets/_TEMPLATE/` se necessário e preparar notas em `$HIVE_DATA_DIR/programs/<program>/`. `scope.json`/`rules.md` e aprovação de escopo pertencem ao operador; o agente nunca os inventa. Finalizar com ingestão e read-back.
 
 ### `code 4 "<decisão>"` — Registrar decisão
 - Acrescentar bloco no [[THE-MIND]] PARTE 6 (Data · Decisão · Por quê · Status).
 
-### `code 5 <vuln> [alvo]` — Dupcheck (evento rápido)
-Checa se a vulnerabilidade **já foi reportada** antes de investir tempo. Ex.: `code 5 "XSS em /search" figma`.
-1. **Local:** grep em `brain/` (`brain.py record` anteriores), `targets/<alvo>/findings/*` e `a-cacada-ate-aqui.md` por vuln/endpoint iguais ou irmãos.
-2. **Programa:** checar known-issues/exclusões da `scope.md`/policy do alvo; se der, buscar a hacktivity pública (WebFetch) por título parecido.
-3. **Veredito:** `PROVÁVEL DUPLICATA` (com a referência) · `NOVO` · `INCERTO`. Duplicata → não reportar (ou só se demonstrar impacto novo). Registrar no brain se duplicata (`status duplicate`).
+### `code 5 <program> <vuln>` — Dupcheck (evento rápido)
+Checa se a vulnerabilidade **já foi reportada** antes de investir tempo.
+1. **Hive:** `hive_search` por mecânica, endpoint, finding, descarte e sinônimos dentro do programa.
+2. **WAL/local:** grep no `brain/` e scratch atual apenas para itens ainda não publicados.
+3. **Público:** known-issues da policy recuperada e hacktivity pública por título/mecânica.
+4. **Veredito:** `PROVÁVEL DUPLICATA` (com a referência) · `NOVO` · `INCERTO`. Duplicata → não reportar (ou só se demonstrar impacto novo). Registrar no brain se duplicata (`status duplicate`).
 > Guardrail: só leitura/OSINT. Não dispara probe.
 
-### `code 6 <alvo>` — Gerar hipóteses (motor de hipóteses)
+### `code 6 <program>` — Gerar hipóteses (motor de hipóteses)
 Casa o **corpus de recon** do alvo contra `memory/signals.md` **e** as âncoras-feeder de
-`rules/chain-table.md`, e cospe leads `[UNTESTED]` **rankeados** na ficha.
+`rules/chain-table.md`, e produz leads `[UNTESTED]` **rankeados** no WAL/handoff.
 1. Carregar o banco: `memory/signals.md` + `patterns.md` + `arsenal.md` + `rules/chain-table.md`.
-2. Reunir o corpus: `targets/<alvo>/recon/*`, a ficha, e qualquer output colado.
+2. Reunir o corpus: `hive_search` (ativos/endpoints/notas/evidências/descartes) + scratch ainda não publicado.
 3. **Pass 1 — sinais únicos:** varrer o corpus contra cada `Sinal:` do `signals.md`. Cada hit → hipótese (sinal · pattern P# · hipótese · probe 🟢/🔴 · FP).
 4. **Pass 2 — composição:** dos sinais acesos, quais pares/trios casam um gatilho de chain (`C-*` / âncora-feeder de `chain-table`) → hipótese de chain.
 5. **Rankear** por (impacto × plausibilidade × probe barato). Probe 🟢 sobe.
-6. **Escrever** os top-N como leads `[UNTESTED]` na ficha.
+6. **Escrever** os top-N como leads `[UNTESTED]` no WAL; publicar no Hive ao fechar.
 7. **Resumo no chat:** quantos sinais acenderam, top-3, o que dá pra testar em silêncio.
 > **Guardrail:** `code 6` só faz matching e leitura — nunca dispara o probe sozinho.
 
-### `code 7 send|find [<alvo>]` — Sync com o board knowledge-targets
-Ver [[THE-MIND]] PARTE 5. O board é a fonte da verdade; `targets/` é cópia de trabalho.
-- `code 7 find <alvo>` → `python3 tools/kb_sync.py find <alvo>` (puxa a ficha pra cá pra caçar).
-- `code 7 send <alvo>` → `python3 tools/kb_sync.py send <alvo>` (devolve o estado + regenera RANKING).
-- `code 7` (sem arg) → `python3 tools/kb_sync.py` (diffa board × local).
-> Caminho do board via `$KNOWLEDGE_TARGETS_DIR` (default `../knowledge-targets`).
+### `code 7 send|find [<program>]` — Interface Hive
+- `code 7 find <program> [asset]`: `hive_search` por visão geral/estado/negativos; se houver asset, `hive_get_context`. Não copiar documentos para `targets/`.
+- `code 7 send <program>`: higienizar e criar notas focadas com `tools/hive_workspace.py note`; chamar `ingest_workspace`; exigir relatório sem falhas, `get_sync_status=idle` e read-back da nova nota.
+- `code 7`: chamar `get_sync_status` e listar IDs conhecidos de `portfolio.md`; em writer, confirmar com `python3 tools/hive_workspace.py catalog`.
+> Não existe busca cross-program no MCP. Catálogo escolhe o ID; busca semântica começa depois.
 
-### `code 8 <alvo>` — Brain brief (pre-flight)
-- `python3 tools/brain.py brief <alvo>` — mostra o que já foi testado, o que está exausto (com blocker), vetores efetivos, comportamento de WAF. **Roda no start do `modo hunter`.**
+### `code 8 <program>` — Brief combinado
+- Consultar Hive por estado, endpoints, negativos e próximos passos; depois `brain.py brief <program>` para o WAL ainda não publicado. Divergência é resolvida em favor do Hive e o WAL deve ser reconciliado.
 
-### `code 9` — Brain status
-- `python3 tools/brain.py status` — visão geral (alvos, exaustos, findings, sessões).
+### `code 9` — Status Hive + WAL
+- `get_sync_status` primeiro; depois `python3 tools/brain.py status`. Fila/ingestão com erro impede assumir que o Hive está atualizado.
 
 ### `code 10 <report> <status> [--bounty $X]` — Learn (evento rápido)
 Registra o **desfecho de uma submissão** pra alimentar decisões de EV futuras (§10 "seguir o dinheiro").
 Ex.: `code 10 report-idor-figma aceito --bounty 2000 --vuln-type IDOR`.
 1. Gravar no brain: `python3 tools/brain.py record <alvo> <status> "submissão:<report>" "desfecho:<status> bounty:<$X> vuln:<tipo>"` (status: `confirmed` aceito · `duplicate` dup · `da-killed`/`policy` fechado).
 2. Anexar 1 linha ao log de sessão: `python3 tools/brain.py log "learn: <report> → <status> (<$X>)"`.
-3. Se aceito/pago, notar o padrão que pagou em `memory/patterns.md`/`arsenal.md` (o que vale repetir).
+3. Publicar o desfecho no programa correspondente do Hive; depois, se aceito/pago, destilar o padrão transversal em `memory/patterns.md`/`arsenal.md`.
 
 ### `code 11 <draft>` — Quality (evento rápido)
 Pontua um **rascunho de report** antes do humano submeter — o "steelman do triager" (§ `rules/mistakes.md`).
@@ -125,7 +123,7 @@ Saída: `nota (A-F) · o que falta · pronto pra submeter? (sim/não)`. Não sub
 
 | Protocolo | Objetivo |
 |-----------|----------|
-| `casa-nova` | Pacote do coletor web → ficha de alvo em `targets/` |
+| `casa-nova` | Pacote do coletor web → programa/notas no Hive |
 | `contra-prova` | Dupla verificação pessimista de um achado — matar falso positivo |
 | `report` | Rascunhar report de achado confirmado + checklist de submissão |
 | `ladrão de bancos` | Escolher alvo → recon em 3 níveis (passivo→médio→completo) → sintetizar |
@@ -137,21 +135,21 @@ Saída: `nota (A-F) · o que falta · pronto pra submeter? (sim/não)`. Não sub
 
 ### `protocolo casa-nova` — do coletor à ficha
 Gatilho: o Tiago cola um pacote de dados passivos do alvo.
-1. Ler o pacote/JSON. 2. Criar `targets/<alvo>/` a partir de `targets/_TEMPLATE/` (target.yml + README + scope.md + recon/). 3. `python3 tools/scope_check.py --list` pra conferir o escopo carregado. 4. Oferecer `code 0` pra enriquecer. 5. `code 7 send` pra registrar no board.
+1. Identificar/validar `program_id`. 2. Consultar o Hive para não duplicar. 3. Higienizar e separar o pacote em notas/evidências focadas com `asset_refs`. 4. O operador cria/revisa `scope.json` se o programa for novo e o aprova fora do MCP. 5. Ingerir, aguardar fila e fazer read-back. `targets/` pode existir só como área de conversão.
 
 ### `protocolo contra-prova` — dupla verificação pessimista (anti-FP)
 Objetivo: **matar falso positivo antes de reportar.** O Claude vira triador hostil e tenta
 **derrubar** o achado. Carregar `rules/never-submit.md` + `rules/mistakes.md`.
 Gatilho: o Tiago aponta um achado (endpoint + request/response + impacto alegado).
 1. **Reafirmar** o achado em 1-2 linhas.
-2. **Escopo:** o ativo está mesmo in-scope? (`scope.md` + `scope_check.py`). Fora → provável inválido, diga na cara.
+2. **Escopo:** repetir `hive_get_context` no ativo exato. Sem autorização confirmada → `FORA/ESCOPO DESCONHECIDO`, sem novo tráfego.
 3. **Never-submit:** o achado está na lista de `rules/never-submit.md`? Se sim, só sobrevive com chain (§11/§12).
 4. **Filtro de triagem — 5 perguntas** (qualquer "não" mata ou rebaixa):
    1. É comportamento padrão da aplicação? 2. Essa info deveria mesmo estar protegida? 3. Impacto real e demonstrável (§4, não teórico)? 4. Reproduzível sem o meu estado de sessão? 5. Já é conhecido/duplicado?
 5. **Contra-argumentar a mecânica** (pessimista): ID adivinhável vs token de capacidade? self-XSS? público de propósito? só best-practice? Puxar os FP da classe em `memory/arsenal.md`.
 6. **Antes de descartar: escalou?** Se não tentou chainar (§12 / `rules/chain-table.md`), o veredito não é final.
 7. **Veredito** (vocabulário fixo): `ACHADO` · `FALSO POSITIVO` · `PADRÃO DA APLICAÇÃO` · `PÚBLICO POR DESIGN` · `INCONCLUSIVO (revisitar)` · `FORA DE ESCOPO`.
-8. Registrar na ficha **e no brain**: `python3 tools/brain.py record <alvo> <status> "<técnica>" "<detalhe>"` (status casa o veredito: `confirmed`/`potential`/`da-killed`/`duplicate`/`policy`/`exhausted`).
+8. Registrar no brain (WAL) e publicar o veredito, inclusive falso positivo/descartado, no Hive.
 Postura: **pessimista por padrão.** Melhor derrubar 3 achados fracos aqui do que queimar credibilidade.
 
 ### `protocolo report` — rascunho de report + checklist
@@ -169,13 +167,13 @@ Só para achado que passou no `contra-prova` como `ACHADO` (idealmente após `es
 4. **Humano revisa e submete — o Claude nunca submete.**
 
 ### `protocolo ladrão de bancos` — recon em 3 níveis (passivo → médio → completo)
-1. **Listar alvos** (`code 7` diffa board × local; ou ler `portfolio.md`).
-2. Tiago escolhe. `code 7 find <alvo>` traz a ficha. `code 8 <alvo>` (brain brief).
-3. **Checar constraints da ficha ANTES de tocar** (rate, manual-only, closed scope, wildcard vs host-específico). ⚠️ Ficha diz "IA proibida na busca" → PARAR, alvo é manual-only.
+1. **Listar IDs** pelo catálogo/`portfolio.md`; não fingir busca cross-program.
+2. Tiago escolhe. `code 7 find <program> [asset]` consulta ao vivo; `code 8` completa o brief.
+3. **Checar constraints do Hive ANTES de tocar** (rate, manual-only, closed scope, wildcard vs host-específico). Policy proíbe IA → PARAR.
 4. **Nível 1 Passivo** (sempre; zero toque — crt.sh/Wayback/urlscan/GitHub/dorks/Shodan). Ao terminar, perguntar "rodar tudo (médio+completo) ou nível a nível?".
    **Nível 2 Médio** (só hosts in-scope, sem fan-out — httpx/curl/katana raso + `cors_headers_scan.py`). Ideal pra escopo host-específico.
    **Nível 3 Completo** (recon massivo — `code 0`; ideal pra wildcard). Otimização: pré-resolver com `dnsx`, httpx fast-fail.
-5. **Sintetizar/filtrar/registrar** sobre os níveis que rodaram. Cru em `recon/`, destilado na ficha, leads `[UNTESTED]` (via `code 6`). Registrar **até que nível chegou**.
+5. **Sintetizar/filtrar/publicar**: cru no scratch, delta e leads no Hive. Registrar até que nível chegou e negativos.
 Guardrails: só alvo autorizado; respeitar escopo + constraints; cada nível herda os guardrails do anterior.
 
 ### `protocolo One Piece` — a caçada com UMA conta só
@@ -183,7 +181,7 @@ Camada intermediária (nível 1) entre unauth (nível 0) e cross-account (nível
 provar com **1 conta**: self-state manipulation · param/type tampering · race na própria conta · bypass de
 escopo (RO→write; V1 vs V2) · step-skip em fluxo multi-etapa · "o check de dono existe?".
 Loop por endpoint: 6 perguntas (foco Q2/Q4/Q6) → `formação de lança` constrói+executa → triagem cética
-(atenção à #4) → escala (§12) → registrar na ficha + brain. Guardrails: nunca rajada em login/reset/MFA;
+(atenção à #4) → escala (§12) → registrar no WAL e publicar no Hive. Guardrails: nunca rajada em login/reset/MFA;
 race só na própria conta com valores mínimos; para-e-confirma antes de saque real.
 
 ### `protocolo armar a arapuca` — juntar peças fracas até virar chain
@@ -192,7 +190,7 @@ fraco** e procura a combinação que vira High/Crit.
 1. Tabela de **peças**: `id · peça · nível de acesso · severidade isolada · o que HABILITA`.
 2. Todo sub-crítico do hunter/rastro/lança **entra como peça**, não é descartado.
 3. **Passo de combinação** (a cada 3-4 peças): par a par e em trios — "A dá o pré-requisito de B? saída de A = entrada de B?". Casar com `rules/chain-table.md`.
-4. **Candidata a chain** → lead `[UNTESTED]` na ficha com os elos nomeados.
+4. **Candidata a chain** → lead `[UNTESTED]` no WAL e no próximo handoff Hive, com os elos nomeados.
 5. Peça que envelhece sem combinar → `[dormant]`, não apagar.
 Guardrail: peça só entra se for **real e reproduzível**.
 
@@ -204,8 +202,8 @@ Fluxo que fica **vivo enquanto ligado**: features novas têm a menor maturidade 
   (subdomínios, hosts vivos, endpoints do JS, headers-chave). Usa `code 1`/`recon.py` (só passivo).
 - **Check** (cada vez que o monitor está ligado e você retoma, ou quando pedir): re-roda o passivo e
   **diffa** contra o baseline. Toda adição (novo subdomínio/endpoint/feature/mudança de header) →
-  lead `[UNTESTED]` na ficha + `brain.py record <alvo> recon "monitor-diff" "<o que mudou>"`.
-- **Estado:** o "ligado/desligado" por alvo mora numa linha na ficha (`monitor: on|off`); ligado =
+  lead `[UNTESTED]` no WAL + `brain.py record <alvo> recon "monitor-diff" "<o que mudou>"`; publicar o delta no Hive.
+- **Estado:** o "ligado/desligado" e o baseline destilado moram no Hive; cópia local é cache; ligado =
   toda sessão de retomada roda um check antes de caçar.
 Guardrails: **só passivo** (herda `postura escudo` de fato — zero toque ativo); respeita escopo.
 
@@ -230,9 +228,10 @@ Ativação: **"modo hunter on"** / **"tá na hora da caçada"**. Desliga: **"mod
 Foco: **impacto real, zero falso positivo.** Nunca inflar trivial/público como grande achado.
 
 **Ao ligar (start):**
-1. **Escolher o alvo:** `code 7` (diffa board × local) ou `portfolio.md`; perguntar "qual alvo?". `code 7 find <alvo>` traz a ficha.
-2. **`code 8 <alvo>` (brain brief)** — o que já rolou, o que evitar (não re-atacar EXHAUSTED sem nova capacidade).
-3. **Carregar o cérebro:** [[THE-MIND]] + `memory/` (patterns/arsenal/signals) + as `rules/` relevantes (mistakes, techniques, waf-bypass, vendor-fingerprints).
+1. **Escolher `program_id`:** usar `portfolio.md` ou o catálogo writer. Não existe `hive_search` global; perguntar qual programa se o ID não estiver explícito.
+2. **Hive pre-flight obrigatório:** `hive_search` por estado, objetivo, evidências e descartes. Para cada asset que possa receber tráfego, `hive_get_context` + recibo no cache. Não forkar documentos para o local.
+3. **`code 8 <program>`:** complementar com o brain/WAL local sem deixar que ele sobreponha o Hive.
+4. **Carregar o cérebro:** [[THE-MIND]] + `memory/` (patterns/arsenal/signals) + as `rules/` relevantes (mistakes, techniques, waf-bypass, vendor-fingerprints).
 
 **Loop de caçada:**
 1. **6 perguntas do The Mind** em cada feature/endpoint (PARTE 1).
@@ -240,17 +239,17 @@ Foco: **impacto real, zero falso positivo.** Nunca inflar trivial/público como 
 3. **Triagem cética** (5 perguntas do `contra-prova`) em cada candidato.
 4. **Escala obrigatória (§12):** todo PASS dispara chain-search (`rules/chain-table.md`) antes de cravar severidade.
 5. **Tenacidade honesta:** "não achei" = "ainda não achei" — atravessar os 4 pontos de desistência (§3.1).
-6. **Gravar no brain no loop:** todo veredito → `brain.py record`; todo endpoint → `brain.py endpoint`; capacidade de chain → `brain.py capability`.
+6. **Gravar no brain como WAL:** todo veredito → `brain.py record`; todo endpoint → `brain.py endpoint`; capacidade → `brain.py capability`. Isso não substitui publicação.
 7. **Persistir conhecimento:** técnica nova → `memory/arsenal.md` (+ sinal em `signals.md`); bypass de WAF/FP novo → `rules/`.
 8. Achado real → `contra-prova` → `escada de jacó` → `report`.
 
 **Ao desligar (`modo hunter off`) — o Selo de saída (OBRIGATÓRIO):**
-1. Flush pra ficha (`README.md`): todo lead com status; superfície/endpoints novos; tabela de achados.
-2. Bloqueios explícitos por lead quente.
-3. Bloco datado em `targets/<alvo>/a-cacada-ate-aqui.md` com **"Próximo passo:"**.
-4. Aprendizado → `memory/`/`rules/`; decisão de rumo → `code 4`.
-5. **Rodar `python3 tools/seal_gate.py <alvo>` — precisa passar.** Se falhar, resolver o que ele apontar (não desligar no seco).
-6. `code 7 send <alvo>` devolve o estado pro board. Resumo de 3 linhas no chat. Só então "modo hunter OFF".
+1. Consolidar o scratch: todo lead com status, endpoints novos, negativos, blockers e **"Próximo passo:"**.
+2. Higienizar segredos/PII e dividir em notas/evidências focadas com `asset_refs`.
+3. `code 7 send <program>`: escrever no workspace Hive, ingerir, aguardar `idle` e fazer read-back.
+4. Aprendizado transversal → `memory/`/`rules/`; decisão de método → `code 4`.
+5. Rodar `python3 tools/seal_gate.py <program>`; resolver falhas.
+6. Só após relatório de ingestão sem falhas + read-back, resumir e declarar `modo hunter OFF`.
 
 ### `postura escudo` — postura silenciosa (não dispara flag) 🛡️
 Ativação: **"postura escudo"** / **"levanta o escudo"**. Desliga: **"baixa o escudo"**.
@@ -266,7 +265,7 @@ Sim → não faz, vira vitrine `[REQUER AUTORIZAÇÃO]`.
 ### `formação de lança` — execução ativa assistida (só dentro do `modo hunter`)
 Ativação: **"forma a lança"**. Desliga: **"baixa a lança"**. Pré: `modo hunter` + alvo autorizado.
 > **Incompatível com `postura escudo`** (levantar o escudo baixa a lança).
-Por lead `[UNTESTED]`: 1. **Constrói** a request/PoC concreta. 2. **Executa** nos limites (escopo, `--rate` da ficha, nunca rajada em login/reset/MFA, sem exploit armado). 3. **Simula** o que não pode tocar → `[SIMULADO]` (nunca vira `[ACHADO]` sem execução real). 4. **Compara com o banco** (patterns/arsenal/rules). 5. **Triagem + escala** iguais ao hunter. 6. **Registra** na ficha + brain. **Para-e-confirma** antes de qualquer request que crie/altere/apague dado.
+Por lead `[UNTESTED]`: 1. **Constrói** a request/PoC concreta. 2. **Reconfirma** o asset no Hive e executa nos limites da policy, nunca rajada em login/reset/MFA. 3. **Simula** o que não pode tocar → `[SIMULADO]`. 4. **Compara** com Hive + patterns/arsenal/rules. 5. **Triagem + escala**. 6. **Registra** no WAL e publica no Hive. **Para-e-confirma** antes de ação mutante.
 
 ### `formação tridente` — teste diferencial em 3 navegadores 🔱
 Ativação: **"forma o tridente"**. Desliga: **"recolhe o tridente"**. **Compatível com o escudo** (é observação, não ataque).
@@ -276,21 +275,20 @@ Roda os fluxos por 3 engines (**Blink**/Gecko/WebKit) e diffa o comportamento �
 Ativação: **"segue o rastro"**. Desliga: **"chega de rastro"**. Tenacidade dirigida: de um sinal (parser
 esquisito, diferencial de erro, timing), **não parar na observação** — listar 3-8 ramificações concretas,
 executar (via lança), cada ramificação que responde diferente vira novo sinal. Cruzar cada nível com
-`memory/patterns.md` + `arsenal.md`. Registrar a árvore na ficha.
+`memory/patterns.md` + `arsenal.md`. Registrar a árvore no WAL e no handoff Hive.
 
 ### `modo dojo` — treino: write-up → conhecimento retido 🥋
 Ativação: **"abre o dojo"**. Desliga: **"fecha o dojo"**. O lado *entrada* de conhecimento (o hunter é a
 saída). Estudo **ativo**: por write-up → 3 perguntas (qual suposição do dev caiu? qual sinal observável?
 qual degrau de escalada?) → distilar no banco (`memory/<classe>.md` + `arsenal.md` + `signals.md` +
-`_ingested.md`) → **recall** (reconstruir de memória, fonte fechada) → **aplicar** o sinal novo nas fichas
+`_ingested.md`) → **recall** (reconstruir de memória, fonte fechada) → **aplicar** o sinal novo aos programas relevantes via consulta Hive
 (`code 6` mental) → **agendar revisão espaçada** (1d→1sem→1mês) em `memory/dojo-log.md`. Guardrail: 2-3
 write-ups/sessão (qualidade > volume).
 
 ### `modo sábado à tarde` — curadoria do portfólio
-Ativação: **"modo sábado"**. Desliga: **"acabou o sábado"**. Monta e cura o `portfolio.md` (e alimenta o
-board). Por programa colado: extrair (nome/plataforma/escopo/reward/link), analisar atratividade (reward ×
-escopo × fit BAC/IDOR+lógica × baixa saturação → prioridade), arquivar no `portfolio.md` sem duplicar. Se
-o programa merece ficha, `code 3` + `code 7 send`. Não caça aqui — só organiza o funil.
+Ativação: **"modo sábado"**. Desliga: **"acabou o sábado"**. Cura `portfolio.md` apenas como catálogo de
+`program_id` e EV. Conteúdo de alvo, scope e recon vão para o Hive; programa novo segue `code 3`, com
+scope revisado/aprovado pelo operador. Não caça aqui — só organiza o funil.
 
 ### `modo bicicleta com rodinhas` — o cérebro como copiloto explícito
 Ativação: **"põe as rodinhas"**. Desliga: **"tira as rodinhas"**. A cada passo o cérebro **sugere

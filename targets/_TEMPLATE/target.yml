@@ -1,8 +1,9 @@
-# Metadados do alvo — fonte do RANKING.md
+# Metadados efêmeros do scratch — nunca fonte de escopo/recon/findings
+program_id: nome-do-programa      # casa com programs/<program_id>/ no Hive
 programa: "Nome do Programa"
 plataforma: hackerone          # intigriti | bugcrowd | hackerone | outros
 url: "https://hackerone.com/exemplo"
-slug: nome-do-programa         # kebab-case; deve bater com o nome da pasta
+slug: nome-do-programa         # deve bater com program_id e a pasta scratch
 tipo: "bounty"                 # bounty | vdp | privado
 status: "prospecto"            # prospecto | recon | hunting | pausado | arquivado
 data_inicio: 2026-01-01

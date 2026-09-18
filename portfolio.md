@@ -3,8 +3,8 @@
 **O que é:** ranking dos programas que você considera caçar, com a intel pra escolher.
 Porta de entrada do `modo hunter`.
 **Alimentado por:** `modo sábado à tarde` (garimpa e rankeia programas aqui).
-**Como o `modo hunter` usa:** lê isto, lista os rankeados, pergunta "qual alvo?", puxa
-`targets/<alvo>/` e caça.
+**Como o `modo hunter` usa:** lê apenas o catálogo/ranking, escolhe um `program_id` e
+consulta esse programa no Hive. Este arquivo não duplica scope, recon ou findings.
 
 ## Como pontuar
 Prioridade ≈ reward × amplitude do escopo × fit (BAC/IDOR + lógica) × (baixa) saturação ×
@@ -14,11 +14,11 @@ responsividade/pagamento real.
 
 ## Ranking (EV pro 1º bounty rápido)
 
-| # | Programa | Plataforma | Prioridade | Reward (top) | Saturação | Fit / observação | Ficha |
-|---|----------|-----------|-----------|--------------|-----------|------------------|-------|
+| # | program_id | Programa | Plataforma | Prioridade | Reward (top) | Saturação | Fit / observação |
+|---|------------|----------|------------|------------|--------------|-----------|------------------|
 | – | _(vazio — alimente com `modo sábado à tarde`)_ | | | | | | |
 
 ---
 
-_Esquema de linha: `# · Programa · Plataforma · Prioridade (Alta/Média/Baixa) · Reward top ·
-Saturação · Fit/observação (1 linha) · Ficha (targets/<alvo>/)`._
+_O `program_id` deve corresponder a `programs/<program_id>/` no Hive. Conteúdo específico
+do programa nunca entra aqui._

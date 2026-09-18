@@ -1,12 +1,13 @@
 # <Nome do Programa>
 
-> Copie a pasta `_templates/alvo` para `<plataforma>/<slug>/` e preencha tudo.
-> Mantenha `target.yml` em dia — ele alimenta o `RANKING.md`.
+> SCRATCH EFÊMERO. O Hive Mind é a fonte canônica. Este diretório nunca concede
+> autorização e pode ser descartado depois de publicar/confirmar o handoff.
 
 ## 1. Identificação
 
 | Campo            | Valor                              |
 |------------------|------------------------------------|
+| program_id       | deve casar com `programs/<program_id>/` no Hive |
 | Plataforma       | hackerone / bugcrowd / intigriti / outros |
 | Link do programa | https://…                          |
 | Tipo             | bounty pago / VDP / privado        |
@@ -19,11 +20,11 @@
 <1–3 linhas: em que pé está o alvo hoje. Ex.: "Recon inicial feito, ~120
 subdomínios vivos. Mapeando a API GraphQL. Nenhum finding ainda.">
 
-## 3. Escopo (resumo)
+## 3. Escopo (cache informativo)
 
 - **In:** …
 - **Out:** …
-- Detalhes e histórico de mudanças: [`scope.md`](./scope.md)
+- Autoridade: resposta ao vivo de `hive_get_context`; `scope.md` local não autoriza.
 
 ## 4. Recon
 
@@ -63,10 +64,9 @@ Status: `rascunho` · `enviado` · `triado` · `aceito` · `duplicado` · `n/a` 
 |------------|--------------------------------------------------|
 | AAAA-MM-DD | …                                                |
 
-## 9. Score
+## 9. Score local de EV
 
-Notas em [`target.yml`](./target.yml). Reflita aqui o resultado de
-`python3 _scripts/gen_ranking.py`.
+Metadado de seleção apenas; não é conteúdo canônico do alvo.
 
 | Fator         | Nota (1–5) | Peso | Subtotal |
 |---------------|:----------:|:----:|:--------:|

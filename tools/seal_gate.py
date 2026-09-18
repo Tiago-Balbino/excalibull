@@ -2,14 +2,14 @@
 """
 seal_gate.py — Gate verificável do "Selo de saída" do modo hunter (Excalibull).
 
-O sword fechava a caçada com um Selo manual (flush pra ficha). Aqui o Selo só
-fecha quando este gate passa — ele checa que o retrato do alvo está 100% atual
-antes de `modo hunter off`:
+O Selo fecha apenas quando o estado local foi convertido em handoff no
+workspace canonico do Hive Mind:
 
-  1. targets/<slug>/README.md         — a ficha existe e não é só o template.
-  2. targets/<slug>/a-cacada-ate-aqui.md — log de sessão com bloco datado de HOJE
+  1. targets/<slug>/a-cacada-ate-aqui.md — scratch com bloco datado de HOJE
      e uma linha "Próximo passo".
-  3. brain/targets/<slug>.md          — o brain tem registros da sessão do alvo.
+  2. brain/targets/<slug>.md          — write-ahead log local com registros.
+  3. $HIVE_DATA_DIR/programs/<slug>/{notes,evidence}/ contém um handoff
+     Excalibull de HOJE. Ingestão e read-back ainda devem ser confirmados via MCP.
 
 Uso:
     python3 tools/seal_gate.py <slug>
@@ -28,6 +28,7 @@ if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
 
 from brain import get_brain_dir, slugify  # noqa: E402
+from hive_workspace import resolve_data_dir  # noqa: E402
 
 PROJECT_ROOT = _TOOLS.parent
 TARGETS_DIR = PROJECT_ROOT / "targets"
@@ -42,18 +43,9 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
     problems: list[str] = []
     tdir = TARGETS_DIR / target
     if not tdir.is_dir():
-        return False, [f"targets/{target}/ não existe (rode `code 7 find {target}` ou `code 3`)."]
+        return False, [f"targets/{target}/ não existe (crie o scratch com `code 3 {target}`)."]
 
-    # 1) ficha
-    readme = tdir / "README.md"
-    if not readme.exists():
-        problems.append(f"targets/{target}/README.md ausente (a ficha).")
-    else:
-        txt = readme.read_text(encoding="utf-8", errors="ignore")
-        if "Copie a pasta" in txt or len(txt.strip()) < 200:
-            problems.append(f"targets/{target}/README.md parece o template vazio — preencha a ficha.")
-
-    # 2) log de sessão datado + próximo passo
+    # 1) log de sessão datado + próximo passo
     log = tdir / "a-cacada-ate-aqui.md"
     if not log.exists():
         problems.append(
@@ -69,12 +61,30 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
         if "próximo passo" not in low and "proximo passo" not in low:
             problems.append("a-cacada-ate-aqui.md sem linha 'Próximo passo:' — diga onde retomar.")
 
-    # 3) brain com registros do alvo
+    # 2) brain com registros do alvo
     brain_file = get_brain_dir() / "targets" / f"{slugify(target)}.md"
     if not brain_file.exists():
         problems.append(
             f"brain sem registros para '{target}' — rode `brain.py record`/`endpoint` nos leads da sessão."
         )
+
+    # 3) handoff no workspace canonico do Hive
+    try:
+        hive_data_dir = resolve_data_dir()
+    except ValueError:
+        problems.append("HIVE_DATA_DIR ausente — nao e possivel provar que o handoff foi escrito no Hive.")
+    else:
+        program_dir = hive_data_dir / "programs" / target
+        candidates: list[Path] = []
+        for folder in ("notes", "evidence"):
+            base = program_dir / folder
+            if base.is_dir():
+                candidates.extend(base.glob(f"*-excalibull-*-{_today()}.md"))
+        if not candidates:
+            problems.append(
+                "handoff Hive de hoje ausente — use `tools/hive_workspace.py note` e depois "
+                "`ingest_workspace` + `get_sync_status` + read-back."
+            )
 
     return (len(problems) == 0), problems
 
@@ -90,7 +100,8 @@ def main(argv: list[str]) -> int:
 
     ok, problems = check_seal(target)
     if ok:
-        print(f"✅ Selo de saída OK para '{target}': ficha + log + brain atualizados.")
+        print(f"✅ Selo local OK para '{target}': scratch + brain + handoff Hive presentes.")
+        print("   Confirme ingest_workspace, get_sync_status idle e read-back antes de declarar hunter OFF.")
         return 0
 
     print(f"🚫 Selo de saída INCOMPLETO para '{target}'. Falta:")

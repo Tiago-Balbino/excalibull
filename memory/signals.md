@@ -5,8 +5,8 @@ padrão P importa"; **este arquivo** responde: **"vi o sinal S no alvo → qual 
 hipótese, qual probe mais barato, qual FP antecipar."** É a camada de **matching** entre o recon e
 o banco. Cada entrada é **greppável** (`grep S-IDOR`, `grep P1`, `grep 🟢`).
 
-**Como usar:** `code 6 <alvo>` varre o corpus de recon contra os `Sinal:` daqui (+ âncoras-feeder de
-`rules/chain-table.md`) e emite leads `[UNTESTED]` rankeados na ficha.
+**Como usar:** `code 6 <program>` varre o corpus recuperado do Hive e o scratch ainda não publicado
+contra os `Sinal:` daqui (+ âncoras-feeder de `rules/chain-table.md`) e emite leads `[UNTESTED]` no WAL/handoff.
 
 **Disciplina de sincronia:** toda entrada nova do `arsenal.md` com "Sinais" ganha uma linha aqui.
 

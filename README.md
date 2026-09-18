@@ -1,218 +1,150 @@
 # Excalibull ⚔️🐂
 
-Framework pessoal de bug bounty — a fusão do **Sword** (método de caçada + modos +
-memória distilada, em português) com o **brain persistente + regras com enforcement** do
-framework pentest-agents. Os alvos vivem num board canônico separado, o
-**knowledge-targets**, e são sincronizados para cá sob demanda.
+Framework pessoal de bug bounty com método de caçada, regras verificáveis e o
+**Hive Mind como fonte canônica de conhecimento por alvo**.
 
-> ⚠️ **Escopo:** use apenas em alvos que você está **autorizado** a testar (programa de bug
-> bounty / pentest com escopo definido). Na dúvida, pergunte antes de disparar.
+> Use somente em programas e ativos que você está autorizado a testar. A única
+> autorização operacional aceita é o veredito atual de `hive_get_context` com
+> `scope.confirmed=true`, `status=authorized` e `action_allowed=true`.
 
----
+## Arquitetura
 
-## Índice
+| Camada | Papel |
+|---|---|
+| Hive Mind | Fonte canônica de scope, policy, recon, endpoints, evidências, findings e resultados negativos. |
+| `THE-MIND.md` | Método, princípios e roteamento do Excalibull. |
+| `CODES.md` | Contrato dos códigos, protocolos e modos. |
+| `memory/` e `rules/` | Conhecimento transversal e regras; não guardam estado específico de alvo. |
+| `brain/` | Write-ahead log local da sessão; deve ser destilado e publicado no Hive. |
+| `targets/` | Scratch efêmero para ferramentas, evidências locais e drafts; nunca concede escopo. |
+| `.claude/settings.json` + `tools/` | Enforcement fail-closed, guards e Selo de saída. |
 
-1. [O que é](#o-que-é)
-2. [Instalação](#instalação)
-3. [Fluxo de caçada](#fluxo-de-caçada)
-4. [Comandos](#comandos)
-   - [Códigos (`code N`)](#códigos-code-n)
-   - [Protocolos (`protocolo <nome>`)](#protocolos-protocolo-nome)
-   - [Modos (`modo <nome>`)](#modos-modo-nome)
-5. [knowledge-targets — o board de alvos](#knowledge-targets--o-board-de-alvos)
-6. [O brain persistente](#o-brain-persistente)
-7. [Mapa de arquivos](#mapa-de-arquivos)
-8. [Ambiente](#ambiente)
+O antigo `knowledge-targets` não participa mais do fluxo. Não há sincronização
+board ↔ local nem duas fontes de verdade.
 
----
+## Pré-requisitos Hive
 
-## O que é
-
-Três camadas que trabalham juntas:
-
-1. **O cérebro (`THE-MIND.md`)** — o método (6 perguntas universais), os princípios
-   sempre-ativos (impacto-primeiro, regra do irmão, A→B, exaustão, never-submit, chain-walk),
-   o roteador de comandos, e a descrição do brain persistente. **Leia primeiro.**
-2. **Os comandos (`CODES.md`)** — `code N` (ações rápidas), `protocolo <nome>` (fluxos),
-   `modo <nome>` (posturas ligadas: hunter, escudo, dojo, lança, tridente…).
-3. **O enforcement (`.claude/settings.json` + `tools/`)** — hooks Python que garantem
-   escopo, never-submit, versão CVSS, arquivos citados, e o Selo de saída.
-
-E dois bancos de dados:
-- **`memory/`** — conhecimento distilado, transversal a alvos (patterns P1–P8, arsenal,
-  signals, sources).
-- **`brain/`** — estado persistente por alvo (o que já foi testado/exaurido, capacidades,
-  endpoints, sessões), gerido por `tools/brain.py`.
-
----
-
-## Instalação
+Configure o MCP `hive-mind` no cliente. Writers também definem:
 
 ```bash
-cd ~/projetos/pessoal/excalibull
-bash setup.sh                      # detecta o SO e instala Go + toolchain de recon
-python3 tools/brain.py init        # inicializa o brain persistente
-python3 tools/brain.py status
+export HIVE_DATA_DIR=/caminho/privado/hive-data
+export HIVE_BIN=/caminho/hive-mind
+export HIVE_TEAM_TAG=team-a
+export HIVE_HANDLE=seu-handle
 ```
 
-`setup.sh` é **multi-OS**: detecta macOS (Homebrew) ou Linux (apt/dnf/pacman/zypper/apk),
-instala Go e, via `go install`, o toolchain: `subfinder httpx katana nuclei dnsx gau
-waybackurls amass gospider gf ffuf`. Também instala as deps Python (`requests`, `pyyaml`,
-`curl_cffi` opcional) e os gf-patterns em `~/.gf`.
-
-Requisitos mínimos sem o toolchain: `python3` + `pip install requests` (as ferramentas de
-recon em Python puro caem para fallback quando um binário falta).
-
----
+Não versione tokens nem essas credenciais. Em reader, consultas funcionam, mas
+o handoff precisa ser entregue a um writer antes de a caçada ser considerada
+fechada.
 
 ## Fluxo de caçada
 
-```
-portfolio.md            escolher o programa (alimentado pelo "modo sábado à tarde")
-    │
-    ▼
-code 7 find <alvo>      puxa a ficha do alvo do knowledge-targets → targets/<alvo>/
-    │
-    ▼
-modo hunter on          carrega THE-MIND + rules/ + memory/ + brain brief (code 8)
-    │
-    ▼
-6 perguntas do The Mind  por feature/endpoint  →  triagem cética (5 perguntas)
-    │
-    ▼
-protocolo contra-prova   mata falso positivo (cruza com rules/never-submit.md)
-    │
-    ▼
-protocolo escada de jacó escala o achado real até o teto
-    │
-    ▼
-protocolo report         rascunho (hooks validam CVSS/arquivos/never-submit); humano submete
-    │
-    ▼
-modo hunter off          Selo de saída (seal_gate.py precisa passar) + brain grava tudo
-    │
-    ▼
-code 7 send <alvo>       devolve o estado atualizado pro knowledge-targets
+```text
+portfolio.md / hive_workspace.py catalog
+             │ escolhe program_id explícito
+             ▼
+code 7 find <program_id> [asset]
+             │ hive_search + hive_get_context (conteúdo untrusted)
+             ▼
+modo hunter on
+             │ scratch em targets/ + WAL em brain/
+             ▼
+contra-prova → escada de jacó → report
+             │
+             ▼
+handoff Hive com resultados positivos E negativos
+             │
+             ▼
+ingest_workspace → get_sync_status idle → read-back
+             │
+             ▼
+seal_gate.py <program_id> → modo hunter off
 ```
 
----
-
-## Comandos
-
-Definição completa em **`CODES.md`**. Resumo:
-
-### Códigos (`code N`)
-
-| Código | Nome | Resumo |
-|--------|------|--------|
-| `code 0 <alvo>` | Recon completo | recon + probe + crawl + gf + scan CORS/headers → ficha |
-| `code 1 <alvo>` | Recon passivo | só enumeração passiva, sem tocar no alvo |
-| `code 2 <url>` | Scan alvo único | audita CORS/headers de uma URL |
-| `code 3 <alvo>` | Nova ficha | cria `targets/<alvo>/` no formato do knowledge-targets |
-| `code 4 "<decisão>"` | Registrar decisão | adiciona bloco no `THE-MIND.md` |
-| `code 5 <vuln> [alvo]` | Dupcheck | checa se a vuln já foi reportada (local + hacktivity) |
-| `code 6 <alvo>` | Gerar hipóteses | casa o recon contra `memory/signals.md` + `rules/chain-table.md` → leads `[UNTESTED]` |
-| **`code 7 send <alvo>`** | **Sync → board** | envia `targets/<alvo>/` → `knowledge-targets/<plataforma>/<slug>/` |
-| **`code 7 find <alvo>`** | **Sync ← board** | busca `knowledge-targets/<plataforma>/<slug>/` → `targets/<alvo>/` |
-| **`code 7`** | **Diff board** | lista/diffa o que existe no board vs em `targets/` |
-| `code 8 <alvo>` | Brain brief | pre-flight do brain: o que já foi testado/exaurido |
-| `code 9` | Brain status | visão geral do brain (alvos, exaustos, findings) |
-| `code 10 <report> <status>` | Learn | registra o desfecho de uma submissão no brain (EV futuro) |
-| `code 11 <draft>` | Quality | pontua um rascunho de report antes de submeter |
-
-### Protocolos (`protocolo <nome>`)
-
-| Protocolo | Objetivo |
-|-----------|----------|
-| `casa-nova` | Pacote do coletor web → ficha de alvo |
-| `contra-prova` | Dupla verificação pessimista — matar falso positivo (5 perguntas + never-submit) |
-| `report` | Rascunhar report de achado confirmado + checklist de submissão |
-| `ladrão de bancos` | Escolher alvo → recon em 3 níveis (passivo→médio→completo) → sintetizar |
-| `One Piece` | Caçada com **uma conta só** (self-state, tampering, race, escopo, step-skip) |
-| `armar a arapuca` | Inventário vivo de achados fracos + passo de combinação → chain |
-| `monitor` | Vigília ligável de um alvo: baseline + checagens de mudança (feature nova = alvo fresco) |
-| `descobrir a roda` | Reconstruir o sistema a partir das peças → mapa do não-testado → cadeias |
-| `escada de jacó` | Subir um `[ACHADO]` confirmado degrau a degrau até o pior caso (antes do report) |
-
-### Modos (`modo <nome>`)
-
-| Modo | Postura |
-|------|---------|
-| `modo hunter` | Caçador sênior: 6 perguntas → triagem → escala → tenacidade → Selo de saída |
-| `postura escudo` | Stealth: só o silencioso (não dispara flag); vitrine `[REQUER AUTORIZAÇÃO]` |
-| `formação de lança` | Execução ativa assistida (dentro do hunter; incompatível com o escudo) |
-| `formação tridente` | Teste diferencial em 3 engines (Blink/Gecko/WebKit) — compatível com o escudo |
-| `seguir o rastro` | Tenacidade dirigida: ramificar em profundidade a partir de um sinal |
-| `modo dojo` | Treino: write-up → conhecimento retido (recall + aplicação + espaçamento) |
-| `modo sábado à tarde` | Curadoria do `portfolio.md` (garimpa e rankeia programas) |
-| `modo bicicleta` | O cérebro como copiloto explícito (sugere o próximo comando) |
-
----
-
-## knowledge-targets — o board de alvos
-
-Os alvos **não** moram no excalibull — vivem no board canônico
-`~/projetos/pessoal/knowledge-targets/` (repositório separado, versionado, organizado por
-plataforma: `hackerone/<slug>/`, `bugcrowd/`, `intigriti/`, `outros/`). Cada alvo tem
-`README.md` (ficha), `target.yml` (metadados + score), `scope.md`, `recon/`, `findings/`,
-`assets/`. O board gera um `RANKING.md` por score composto.
-
-`excalibull/targets/` é uma **cópia de trabalho**: vazia por padrão. Você traz um alvo pra
-cá pra caçar e devolve quando termina:
+Antes de qualquer tráfego, chame `hive_get_context` para o ativo exato. Para o
+hook Bash reconhecer o veredito durante a sessão, salve a resposta estruturada
+e registre-a:
 
 ```bash
-python3 tools/kb_sync.py find coinspot   #  code 7 find — puxa do board pra targets/
-# ... caça ...
-python3 tools/kb_sync.py send coinspot   #  code 7 send — devolve pro board + regenera ranking
-python3 tools/kb_sync.py                 #  code 7 (sem arg) — diffa board vs targets/
+python3 tools/hive_scope_cache.py record /tmp/hive-context.json
+python3 tools/hive_scope_cache.py check api.example.com
 ```
 
-O caminho do board é resolvido por `KNOWLEDGE_TARGETS_DIR` (default `../knowledge-targets`).
-A estrutura de `targets/<alvo>/` espelha a do board, então o sync é uma cópia direta em
-ambos os sentidos.
+Os recibos expiram, ficam em `.hive/` e não são autoridade independente: apenas
+materializam o que o Hive retornou.
 
----
+## Comandos principais
 
-## O brain persistente
+| Código | Ação |
+|---|---|
+| `code 0 <program> <asset>` | Recon completo autorizado; destila resultado no Hive. |
+| `code 1 <program> <asset>` | Recon passivo; consulta o histórico do Hive primeiro. |
+| `code 2 <program> <url>` | Scan pontual após confirmação de escopo. |
+| `code 3 <program>` | Prepara programa/nota; `scope.json` requer operador. |
+| `code 5 <program> <vuln>` | Dupcheck no Hive + fontes públicas. |
+| `code 6 <program>` | Hipóteses a partir de Hive + scratch + memória transversal. |
+| `code 7` | Catálogo/status do Hive. |
+| `code 7 find <program> [asset]` | Contexto ao vivo; não copia ficha. |
+| `code 7 send <program>` | Publica handoff, ingere, espera e faz read-back. |
+| `code 8 <program>` | Brief combinado: Hive primeiro, brain local depois. |
+| `code 9` | Estado local + `get_sync_status`. |
+| `code 10/11` | Aprendizado de submissão e quality gate. |
 
-`tools/brain.py` mantém o estado da caçada em `brain/` (local; gitignored exceto o índice
-`MEMORY.md`). Ele evita re-testar o que já foi exaurido e lembra as capacidades obtidas.
+Definição completa: `CODES.md`.
+
+## Escrita no Hive
+
+Crie uma nota canônica a partir do log higienizado:
 
 ```bash
-python3 tools/brain.py init                 # inicializa
-python3 tools/brain.py brief <alvo>         # pre-flight (code 8): o que já rolou
-python3 tools/brain.py status               # visão geral (code 9)
-python3 tools/brain.py record <alvo> <status> "<técnica>" "<detalhe>"
-python3 tools/brain.py endpoint <alvo> /api/x tested --vuln-class idor
-python3 tools/brain.py capability <alvo> "<capacidade>" --from-capability "<origem>"
-python3 tools/brain.py exhausted <alvo>     # vetores mortos
+python3 tools/hive_workspace.py note etoro handoff \
+  --input targets/etoro/a-cacada-ate-aqui.md \
+  --asset affapi.etoro.com --tag authz
 ```
 
-O `modo hunter` grava no brain automaticamente durante o loop; o **Selo de saída**
-(`modo hunter off`) só fecha quando `tools/seal_gate.py` confirma que ficha + log + brain
-estão atualizados.
+Depois, no writer, use `ingest_workspace` pelo MCP (preferido) ou:
 
----
+```bash
+python3 tools/hive_workspace.py ingest
+```
+
+Só considere a publicação concluída quando a ingestão terminar sem falha, o
+status estiver `idle` e uma consulta recuperar a nova nota. Resultados
+descartados são publicados também: eles evitam repetição.
+
+## Enforcement de escopo
+
+`tools/scope_hook.py` é fail-closed para URLs HTTP(S):
+
+- host com recibo Hive vigente e autorizado → permite;
+- `unknown`, `out_of_scope`, recibo expirado ou ausente → bloqueia;
+- arquivos `scope.md` em `targets/` são apenas referência e nunca autorizam;
+- loopback é liberado para a infraestrutura local.
+
+`tools/scope_check.py` continua disponível para analisar arquivos legados, mas
+seu resultado é diagnóstico, não autorização para tráfego.
+
+## Instalação local
+
+```bash
+bash setup.sh
+python3 tools/brain.py init
+python3 tools/brain.py status
+python3 tools/hive_workspace.py catalog
+```
+
+`setup.sh` instala o toolchain de recon. A instalação/configuração do Hive Mind
+é separada porque envolve identidade, papel reader/writer e credenciais privadas.
 
 ## Mapa de arquivos
 
-| Arquivo/pasta | Papel |
+| Caminho | Papel |
 |---|---|
-| `THE-MIND.md` | O cérebro — ler primeiro. Método + princípios + roteador + brain + log. |
-| `CODES.md` | Todos os comandos (`code`/`protocolo`/`modo`). |
-| `CLAUDE.md` | Regras operacionais do projeto (para o agente). |
-| `portfolio.md` | Funil de programas rankeados. |
-| `rules/` | Regras de referência: never-submit, chain-table, identities, mistakes, techniques, waf-bypass, vendor-fingerprints, payloads. |
-| `memory/` | Conhecimento distilado (patterns P1–P8, arsenal, signals, sources). |
-| `brain/` | Estado persistente por alvo (`brain.py`; local, gitignored exceto `MEMORY.md`). |
-| `targets/<alvo>/` | Cópia de trabalho de um alvo (sincronizada com o board via `code 7`). |
-| `tools/` | brain, kb_sync (code 7), guards de enforcement, recon, cors/headers scan, resolve DoH. |
-| `.claude/settings.json` | Hooks de enforcement (escopo, never-submit, CVSS, arquivos, Selo). |
-
----
-
-## Ambiente
-
-Linux ou macOS nativo (rede + git ok). `python3` (não `uv`). `pip install requests pyyaml`.
-Toolchain de recon via `bash setup.sh`. O board `knowledge-targets` é um repo git separado,
-sibling do excalibull em `~/projetos/pessoal/`.
+| `CLAUDE.md`, `AGENTS.md` | Regras para agentes. |
+| `.claude/skills/hive-mind/` | Workflow Hive no Claude. |
+| `.codex/mcp-instructions.md` | Workflow Hive no Codex. |
+| `portfolio.md` | Catálogo/EV; contém IDs, não conteúdo canônico do alvo. |
+| `tools/hive_scope_cache.py` | Materializa vereditos do Hive para o hook. |
+| `tools/hive_workspace.py` | Catálogo writer, criação de nota e fallback de ingestão. |
+| `tools/seal_gate.py` | Exige scratch, brain e handoff Hive no fechamento. |
+| `targets/_TEMPLATE/` | Estrutura de scratch, sem autoridade. |
