@@ -1,9 +1,10 @@
 {
   "mcpServers": {
-    "hive-mind": {
+    "hive_mind": {
       "type": "stdio",
-      "command": "/home/nice000160/projetos/pessoal/hive_mind/.qdrant-mcp-server/local-lab/hive-writer",
-      "args": []
+      "command": "/home/nice000160/projetos/pessoal/hive_instance/bin/hive-teste",
+      "args": [],
+      "env": {}
     }
   }
 }

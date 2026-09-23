@@ -16,7 +16,7 @@ responsividade/pagamento real.
 
 | # | program_id | Programa | Plataforma | Prioridade | Reward (top) | Saturação | Fit / observação |
 |---|------------|----------|------------|------------|--------------|-----------|------------------|
-| – | _(vazio — alimente com `modo sábado à tarde`)_ | | | | | | |
+| 1 | `toolsforhumanity` | Tools For Humanity / World | HackerOne | média-alta | $25k (World App Primary) | alta (614 reports/90d) | BAC/IDOR/lógica no developer.worldcoin.org + World App/MiniApps (Primary). Open Scope + Gold/AI Safe Harbor. CVSS 4.0. |
 
 ---
 

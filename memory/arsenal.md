@@ -82,6 +82,30 @@ a cada caçada — adicione a classe quando caçá-la.
 - **Fontes:** Internet Archive CDX API. Espelhado em `signals.md` (`S-OSINT-CDX-01`). Caso real: Yahoo Lightyear CMS → Auth0 tenant + lead `referrer_url` (2026-09-08).
 
 ---
+
+## L1/EVM — conservação de valor (gas/fee/mint/burn) 🔗
+
+Classe para blockchain/L1 (ex.: Circle Arc). Alvo: **valor criado ou destruído do nada** na
+camada de execução (fee accounting, reward do bloco, mint/burn de native coin).
+
+- **Sinais:** custom `reward_beneficiary`/handler de fee que sobrescreve o comportamento do revm;
+  "USDC-as-gas"/fee em token de N casas; base fee **redirecionada** em vez de queimada; precompile
+  de mint/burn; EMA/smoothing de base fee; EIP-8037 reservoir/state-gas split.
+- **Confirmação (o teste-chave):** montar a **equação de conservação** — `débito líquido do sender ==
+  crédito do beneficiário`. Ler a **versão EXATA** do revm no `Cargo.lock` (não assumir): `Gas::used()`
+  (= `spent - refunded`?), a ordem do `post_execution` (`refund → reimburse_caller → reward_beneficiary`),
+  e o que o `reimburse_caller` devolve (`remaining + reservoir + refunded`). Diferença entre o custom e o
+  stock = candidato a mint. Baixar o crate do crates.io (`static.crates.io/crates/<c>/<c>-<v>.crate`) p/
+  ler o source — o operador clona (github/crates.io são barrados pelo scope_hook).
+- **Escalada:** mint por-tx × nº de txs = inflação → A1 (Extreme). Mesmo **latente** (gated por spec/hardfork
+  inativo, ex.: reservoir=0 em PRAGUE) vira nota de hardening — vira Extreme se o hardfork ativar.
+- **FP comuns:** redirecionar base fee (não queimar) é **balanceado** se o sender pagou o mesmo — não é mint.
+  `used()` do revm já é líquido de refund (não re-subtrair). mint/burn precompile costuma ser `checked_add` +
+  caller-gated (apertado). Signer/consenso: verificação delegada a effect handler é **design**, não bypass.
+- **Fontes:** clone dos repos in-scope (arc-node/malachite) + crate source do revm. Caso real: Circle Arc
+  `reward_beneficiary` omite `used()-reservoir` (mint latente sob EIP-8037), 2026-09-22. Ver Hive `circle-arc`.
+
+---
 _Adicione uma classe quando caçá-la (auth/sessão, SSRF, SSTI, XSS, upload, race, oauth, graphql,
 llm-ai…). Mantenha o esquema: Sinais · Confirmação · Bypasses · Escalada · FP · Fontes. Espelhe o
 sinal em `signals.md`._

@@ -117,6 +117,6 @@ done
 echo ""
 echo "Pronto. Próximos passos:"
 echo "  python3 tools/brain.py init"
-echo "  configure o MCP hive-mind e HIVE_DATA_DIR/HIVE_BIN no writer"
+echo "  configure o MCP hive_mind e HIVE_DATA_DIR/HIVE_BIN no writer"
 echo "  python3 tools/hive_workspace.py catalog"
 echo "  antes de recon: hive_get_context + tools/hive_scope_cache.py record"

@@ -176,6 +176,19 @@ log local para o loop da sessão, mas esse WAL não é fonte canônica e deve se
 - `brain/` — **WAL local** do loop: útil enquanto a sessão está aberta; publicar no Hive.
 - `targets/` — **scratch efêmero** para ferramentas, bruto e drafts; nunca autoriza.
 
+**Regra permanente — recon SEMPRE fecha no Hive:** ao concluir QUALQUER protocolo de recon
+(`achar o x`, `ladrão de bancos`, `code 0`/`code 1`, baseline/diff do `monitor`), os achados —
+superfície, hosts/endpoints, hipóteses `[UNTESTED]` **e negativos** — vão para o `hive_mind` ANTES
+de encerrar o protocolo: nota focada com `asset_refs` → `ingest_workspace` → fila `idle` → read-back.
+Sem publicação confirmada, o recon **não está "feito"**. WAL (`brain/`) e `targets/` não contam como
+persistência. (Recon passivo como `achar o x` publica **sem** recibo; só o tráfego ativo exige recibo.)
+
+**Regra permanente — a arapuca captura o encadeável:** com a `armar a arapuca` ligada num alvo, toda
+informação que for **usada** num teste ou que **case o critério de encadeamento/escalada** (enabler,
+sub-crítico composável, escalador, primitiva) vai **também** para a **arapuca** do alvo no Hive —
+**mesmo que já esteja no recon**. Recon = tudo encontrado; arapuca = só o que encadeia/escala. A
+duplicação é intencional e serve pra gerar hipóteses de escalada depois (`code 6`).
+
 **Comandos do brain (detalhe em [[CODES]]):**
 ```
 python3 tools/brain.py init                       # inicializa brain/

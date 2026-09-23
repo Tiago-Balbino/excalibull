@@ -121,14 +121,19 @@ Saída: `nota (A-F) · o que falta · pronto pra submeter? (sim/não)`. Não sub
 
 ## Protocolos
 
+> **Invariante (ver [[THE-MIND]] PARTE 5):** todo protocolo de recon **fecha no `hive_mind`** —
+> superfície, endpoints, hipóteses `[UNTESTED]` e negativos viram nota com `asset_refs` →
+> `ingest_workspace` → `idle` → read-back, ANTES de encerrar. Sem isso, o recon não está feito.
+
 | Protocolo | Objetivo |
 |-----------|----------|
 | `casa-nova` | Pacote do coletor web → programa/notas no Hive |
 | `contra-prova` | Dupla verificação pessimista de um achado — matar falso positivo |
 | `report` | Rascunhar report de achado confirmado + checklist de submissão |
-| `ladrão de bancos` | Escolher alvo → recon em 3 níveis (passivo→médio→completo) → sintetizar |
+| `achar o x` | Recon **passivo** de superfície (OSINT puro, zero toque, **sem recibo**) → mapa da superfície + hipóteses no Hive |
+| `ladrão de bancos` | **Usar as ferramentas**: recon ativo médio→completo em host autorizado (**exige recibo** `scope approve`+`record`); o nível 1 passivo delega ao `achar o x` |
 | `One Piece` | Caçada da camada de **1 conta só** (self-state, tampering, race, escopo, step-skip) |
-| `armar a arapuca` | Inventário vivo de achados fracos + passo de combinação → chain |
+| `armar a arapuca` | **Arapuca no Hive**: SÓ peças encadeáveis/escaláveis (enablers, primitivas, sub-críticos) + passo de combinação → chain. Uma vez ligada, toda info que casa o critério entra nela (mesmo já estando no recon) |
 | `monitor` | **Vigília ligável** de um alvo: baseline + checagens de mudança (superfície nova = alvo fresco) |
 | `descobrir a roda` | Reconstruir o sistema a partir das peças → mapa do não-testado → cadeias |
 | `escada de jacó` | Subir um `[ACHADO]` confirmado degrau a degrau até o pior caso (antes do report) |
@@ -166,15 +171,39 @@ Só para achado que passou no `contra-prova` como `ACHADO` (idealmente após `es
    request+response do passo-chave · PoC mínima · severidade calibrada · duplicata verificada.
 4. **Humano revisa e submete — o Claude nunca submete.**
 
-### `protocolo ladrão de bancos` — recon em 3 níveis (passivo → médio → completo)
+### `protocolo achar o x` — recon passivo: achar a superfície (sem recibo) 🔍
+Objetivo: descobrir a **superfície de ataque** de um alvo usando **só fontes de terceiros/OSINT** —
+**zero toque no alvo, NÃO precisa de recibo do Hive** (nada de tráfego ativo passa pelo `scope_hook`;
+não exige `scope approve` nem `record`, basta o `program_id` existir).
+Gatilho: **"achar o x <program>"** / **"inicia achar o x"**. É o **nível 1 passivo** que o
+`ladrão de bancos` costumava embutir, agora protocolo próprio.
+1. **Hive pre-flight (leitura):** `hive_search` no programa por estado/superfície/negativos já conhecidos;
+   `code 7 find`. Não duplicar o que já está mapeado.
+2. **Coleta OSINT — só terceiros, NUNCA o alvo:**
+   - CT logs (crt.sh), urlscan.io, Wayback/CDX, DNS passivo via DoH (não `dig` no host se não houver
+     recibo), ASN/infra, Shodan/Censys.
+   - GitHub/GitLab: repos da org, specs OpenAPI/Postman, dorks por segredo/endpoint/host.
+   - JS/source maps **já arquivados por terceiros** (urlscan/Wayback) — não puxar do alvo.
+3. **Destilar a superfície:** hosts/subdomínios (marcar in/out-scope e carve-outs), endpoints/rotas,
+   APIs/specs, infra (CDN/WAF/cloud/k8s), stack/auth, e as **perguntas-pivô** que só o ativo fecha.
+4. **Hipóteses semeadas** rankeadas (casa `memory/signals.md` + `rules/chain-table.md`), marcadas `[UNTESTED]`.
+5. **Publicar no Hive:** nota de recon com `asset_refs` → ingestão → `idle` → read-back (fluxo `code 7 send`).
+Guardrails: **100% passivo** (herda `postura escudo`); qualquer coisa que tocaria o alvo vira
+`[REQUER AUTORIZAÇÃO]` e é **entregue ao `ladrão de bancos`**. **Sem recibo do Hive.**
+
+### `protocolo ladrão de bancos` — usar as ferramentas: recon ATIVO (médio → completo)
+Continuação ativa do `achar o x`. **Exige host autorizado + recibo** (`scope approve` do operador e
+`record` do recibo pra liberar o `scope_hook`). Usa o ferramental de verdade contra o alvo.
 1. **Listar IDs** pelo catálogo/`portfolio.md`; não fingir busca cross-program.
 2. Tiago escolhe. `code 7 find <program> [asset]` consulta ao vivo; `code 8` completa o brief.
-3. **Checar constraints do Hive ANTES de tocar** (rate, manual-only, closed scope, wildcard vs host-específico). Policy proíbe IA → PARAR.
-4. **Nível 1 Passivo** (sempre; zero toque — crt.sh/Wayback/urlscan/GitHub/dorks/Shodan). Ao terminar, perguntar "rodar tudo (médio+completo) ou nível a nível?".
-   **Nível 2 Médio** (só hosts in-scope, sem fan-out — httpx/curl/katana raso + `cors_headers_scan.py`). Ideal pra escopo host-específico.
-   **Nível 3 Completo** (recon massivo — `code 0`; ideal pra wildcard). Otimização: pré-resolver com `dnsx`, httpx fast-fail.
+3. **Checar constraints do Hive ANTES de tocar** (rate, manual-only, closed scope, wildcard vs host-específico).
+   Policy proíbe IA → PARAR. **Sem recibo `action_allowed=true` → PARAR** e devolver ao operador.
+4. **Nível 1 Passivo** = rodar/consultar o **`achar o x`** (superfície já mapeada, sem recibo).
+   **Nível 2 Médio** (só hosts in-scope, sem fan-out — httpx/curl/katana raso + `cors_headers_scan.py`).
+   Ideal pra escopo host-específico. **Nível 3 Completo** (recon massivo — `code 0`; ideal pra wildcard).
+   Otimização: pré-resolver com `dnsx`, httpx fast-fail.
 5. **Sintetizar/filtrar/publicar**: cru no scratch, delta e leads no Hive. Registrar até que nível chegou e negativos.
-Guardrails: só alvo autorizado; respeitar escopo + constraints; cada nível herda os guardrails do anterior.
+Guardrails: só alvo autorizado **com recibo vigente**; respeitar escopo + constraints; cada nível herda os guardrails do anterior.
 
 ### `protocolo One Piece` — a caçada com UMA conta só
 Camada intermediária (nível 1) entre unauth (nível 0) e cross-account (nível 2). Testa tudo que dá pra
@@ -184,15 +213,36 @@ Loop por endpoint: 6 perguntas (foco Q2/Q4/Q6) → `formação de lança` constr
 (atenção à #4) → escala (§12) → registrar no WAL e publicar no Hive. Guardrails: nunca rajada em login/reset/MFA;
 race só na própria conta com valores mínimos; para-e-confirma antes de saque real.
 
-### `protocolo armar a arapuca` — juntar peças fracas até virar chain
-Inventário vivo em `targets/<alvo>/arapuca.md` (não um loop). Cataloga cada achado **individualmente
-fraco** e procura a combinação que vira High/Crit.
-1. Tabela de **peças**: `id · peça · nível de acesso · severidade isolada · o que HABILITA`.
-2. Todo sub-crítico do hunter/rastro/lança **entra como peça**, não é descartado.
-3. **Passo de combinação** (a cada 3-4 peças): par a par e em trios — "A dá o pré-requisito de B? saída de A = entrada de B?". Casar com `rules/chain-table.md`.
-4. **Candidata a chain** → lead `[UNTESTED]` no WAL e no próximo handoff Hive, com os elos nomeados.
-5. Peça que envelhece sem combinar → `[dormant]`, não apagar.
-Guardrail: peça só entra se for **real e reproduzível**.
+### `protocolo armar a arapuca` — inventário de encadeamento (documento no Hive)
+Ativação: **"arma a arapuca <program>"**. Desliga: **"desarma a arapuca <program>"**.
+A **arapuca é um documento dedicado no Hive** (`programs/<program>/notes/*-arapuca-*.md`, `document_type:
+note`, tag `arapuca`), **separado do recon**: o recon guarda TUDO que foi encontrado; a arapuca guarda
+**SÓ o que pode ser encadeado ou escalar** uma vulnerabilidade. Serve pra, no futuro, gerar hipóteses
+de escalada (`code 6` puxa dela).
+
+**Ao ligar:** criar a arapuca com as peças já conhecidas do alvo (varrer recon/notas do Hive + WAL),
+`ingest_workspace` → `idle` → read-back. `targets/<alvo>/arapuca.md` pode existir só como cache local.
+
+**Critério de entrada (uma peça SÓ entra se casar ≥1):**
+- **Enabler:** dá um pré-requisito/capacidade que outro bug precisa (ex.: leak de trace/ID/token,
+  controle de estado, oráculo de erro, primitiva econômica).
+- **Sub-crítico composável:** fraco isolado, mas plausivelmente combinável (par/trio) em High/Crit.
+- **Escalador:** aumenta impacto/alcance/severidade de um `[ACHADO]` existente.
+- **Primitiva reutilizável:** info/mecanismo que reaparece como elo em `rules/chain-table.md`.
+> NÃO entra: recon puro sem relevância de chain (fica só no recon). Peça tem que ser **real/reproduzível**.
+
+**Regra permanente (enquanto o alvo é caçado):** sempre que algo for **usado** num teste OU for uma
+informação que **casa o critério acima** — **mesmo que já esteja guardada no recon** — **registrar
+(também) na arapuca** e re-ingerir. A arapuca é a visão curada de encadeamento; duplicar do recon pra cá
+é intencional.
+
+**Formato:**
+1. Tabela de **peças**: `id · peça · nível de acesso · severidade isolada · o que HABILITA · origem (nota/recon)`.
+2. **Passo de combinação** (a cada 3-4 peças): par a par e em trios — "A dá o pré-requisito de B?
+   saída de A = entrada de B?". Casar com `rules/chain-table.md`.
+3. **Candidata a chain** → lead `[UNTESTED]` com os elos nomeados (na arapuca + próximo handoff).
+4. Peça que envelhece sem combinar → `[dormant]`, não apagar.
+5. Fechar sempre no Hive (ingest + read-back), como todo protocolo (ver [[THE-MIND]] PARTE 5).
 
 ### `protocolo monitor` — vigília ligável de mudanças no alvo
 Ativação: **"liga o monitor <alvo>"** / **"monitora <alvo>"**. Desliga: **"desliga o monitor <alvo>"**.

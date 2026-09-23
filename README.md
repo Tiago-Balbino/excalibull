@@ -24,11 +24,11 @@ board ↔ local nem duas fontes de verdade.
 
 ## Pré-requisitos Hive
 
-Configure o MCP `hive-mind` no cliente. Writers também definem:
+Configure o MCP `hive_mind` no cliente. Writers também definem:
 
 ```bash
 export HIVE_DATA_DIR=/caminho/privado/hive-data
-export HIVE_BIN=/caminho/hive-mind
+export HIVE_BIN=/caminho/hive_instance/bin/hive-teste
 export HIVE_TEAM_TAG=team-a
 export HIVE_HANDLE=seu-handle
 ```
