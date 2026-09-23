@@ -132,6 +132,7 @@ Saída: `nota (A-F) · o que falta · pronto pra submeter? (sim/não)`. Não sub
 | `report` | Rascunhar report de achado confirmado + checklist de submissão |
 | `achar o x` | Recon **passivo** de superfície (OSINT puro, zero toque, **sem recibo**) → mapa da superfície + hipóteses no Hive |
 | `ladrão de bancos` | **Usar as ferramentas**: recon ativo médio→completo em host autorizado (**exige recibo** `scope approve`+`record`); o nível 1 passivo delega ao `achar o x` |
+| `saquear navios` | **Orquestrador de mineração**: um comando encadeia passive-delta → jsrecon (fingerprint→playbook) → merge no corpus de endpoints; agente fecha com recibo/hipóteses/browser |
 | `One Piece` | Caçada da camada de **1 conta só** (self-state, tampering, race, escopo, step-skip) |
 | `armar a arapuca` | **Arapuca no Hive**: SÓ peças encadeáveis/escaláveis (enablers, primitivas, sub-críticos) + passo de combinação → chain. Uma vez ligada, toda info que casa o critério entra nela (mesmo já estando no recon) |
 | `monitor` | **Vigília ligável** de um alvo: baseline + checagens de mudança (superfície nova = alvo fresco) |
@@ -204,6 +205,21 @@ Continuação ativa do `achar o x`. **Exige host autorizado + recibo** (`scope a
    Otimização: pré-resolver com `dnsx`, httpx fast-fail.
 5. **Sintetizar/filtrar/publicar**: cru no scratch, delta e leads no Hive. Registrar até que nível chegou e negativos.
 Guardrails: só alvo autorizado **com recibo vigente**; respeitar escopo + constraints; cada nível herda os guardrails do anterior.
+
+### `protocolo saquear navios` — orquestrador de mineração (1 comando) ⛴️
+Encadeia o pipeline de "pegar tudo" e consolida no Hive. Gatilho: **"saquear navios <program>"**.
+Ferramenta: `tools/saquear.py <program> --domains <d1,d2> --spa-hosts <h1,h2> --data-dir <hive-data>`.
+1. **passive** (`passive.py`) — agrega hosts de fontes 3rd-party (crt.sh/OTX/HackerTarget/urlscan/
+   Wayback + Censys/Shodan/VT/SecurityTrails por env) e faz **diff vs Hive** → só o delta PROD novo.
+2. **jsrecon** por SPA host — endpoints ocultos (BFS de bundles) + **STACK FINGERPRINT→playbook**
+   (Hasura/Auth0/Retool/Firebase/OIDC/Next → teste dirigido). Bundles salvos no scratch.
+3. **endpoints** (`endpoints.py merge`) — mescla os endpoints no **corpus canônico** (`document_type:
+   endpoint`, dedupe método-agnóstico) que o `code 6` consome via `hive_search(document_types=[endpoint])`.
+4. **Saída**: hosts novos, endpoints novos, stacks+playbooks. Passos 1–2 tocam alvo (jsrecon) → **exigem
+   recibo** (`record-scope` cobre o programa todo de uma vez); passive é 3rd-party.
+Fecho do AGENTE (não automatizado): `record-scope` p/ hosts novos → semear hipóteses (`code 6`) →
+captura de XHR autenticado via browser p/ endpoints atrás de login → `ingest_workspace` + read-back.
+Guardrails: herda os do `ladrão de bancos`; nada de fan-out; só publica delta destilado.
 
 ### `protocolo One Piece` — a caçada com UMA conta só
 Camada intermediária (nível 1) entre unauth (nível 0) e cross-account (nível 2). Testa tudo que dá pra

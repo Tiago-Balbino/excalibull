@@ -195,12 +195,65 @@ def authorization_for(target: str, now: datetime | None = None) -> dict | None:
     return allowed[-1] if allowed else matches[-1]
 
 
+def record_scope(program: str, data_dir: str, revision: str,
+                 ttl_hours: float = DEFAULT_TTL_HOURS) -> list[dict]:
+    """Materializa recibos p/ TODO o programa a partir do scope.json APROVADO.
+
+    Um recibo por regra: includes viram autorização (wildcard cobre todos os
+    subdomínios via _asset_matches → 1 recibo p/ *.dominio); excludes viram
+    negação (action_allowed=false → 'denied wins' no authorization_for).
+    `revision` (sha256 do `scope approve`) é a prova de aprovação — o agente
+    não pode inventá-la; substitui a materialização host-a-host.
+    """
+    if not program:
+        raise ValueError("program ausente")
+    if not revision or not isinstance(revision, str):
+        raise ValueError("--revision (sha256 do `scope approve`) obrigatório: prova de aprovacao")
+    scope_path = Path(data_dir).expanduser() / "programs" / program / "scope.json"
+    if not scope_path.is_file():
+        raise ValueError(f"scope.json nao encontrado: {scope_path}")
+    manifest = json.loads(scope_path.read_text(encoding="utf-8"))
+    if manifest.get("program_id") not in (None, program):
+        raise ValueError("program_id do scope.json nao bate com o argumento")
+    valid = {"host", "wildcard_domain", "ip", "cidr", "url_prefix"}
+    now = _now()
+    expires = _iso(now + timedelta(hours=ttl_hours))
+    kept = [r for r in _active_receipts(_load_cache()) if r.get("program_id") != program]
+    new: list[dict] = []
+    for rule in manifest.get("rules", []):
+        atype, value, action = rule.get("asset_type"), rule.get("value"), rule.get("action")
+        if atype not in valid or not isinstance(value, str) or action not in {"include", "exclude"}:
+            continue
+        allowed = action == "include"
+        new.append({
+            "program_id": program,
+            "asset": {"type": atype, "value": value},
+            "status": "authorized" if allowed else "out_of_scope",
+            "confirmed": allowed,
+            "action_allowed": allowed,
+            "scope_revision": revision,
+            "matched_rules": [rule],
+            "recorded_at": _iso(now),
+            "expires_at": expires,
+        })
+    if not new:
+        raise ValueError("nenhuma regra valida no scope.json")
+    _save_cache({"schema_version": SCHEMA_VERSION, "receipts": kept + new})
+    return new
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Cache fail-closed de escopo confirmado pelo Hive")
     sub = parser.add_subparsers(dest="command", required=True)
     rec = sub.add_parser("record", help="registra a resposta JSON de hive_get_context")
     rec.add_argument("json_file", help="arquivo JSON ou - para stdin")
     rec.add_argument("--ttl-hours", type=float, default=DEFAULT_TTL_HOURS)
+    rsc = sub.add_parser("record-scope",
+                         help="materializa recibos (wildcard+host) do scope.json APROVADO — 1 comando p/ todo o programa")
+    rsc.add_argument("program")
+    rsc.add_argument("--revision", required=True, help="sha256 do `scope approve` (prova de aprovacao)")
+    rsc.add_argument("--data-dir", default=None, help="dir do Hive (default: $HIVE_DATA_DIR)")
+    rsc.add_argument("--ttl-hours", type=float, default=DEFAULT_TTL_HOURS)
     chk = sub.add_parser("check", help="consulta autorizacao em cache")
     chk.add_argument("target")
     sub.add_parser("list", help="lista recibos ainda validos")
@@ -216,6 +269,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERRO: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(receipt, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "record-scope":
+        if not 0 < args.ttl_hours <= 24:
+            parser.error("--ttl-hours deve estar entre 0 e 24")
+        data_dir = args.data_dir or os.environ.get("HIVE_DATA_DIR")
+        if not data_dir:
+            parser.error("passe --data-dir ou defina HIVE_DATA_DIR (ex.: .../hive_instance/data)")
+        try:
+            recs = record_scope(args.program, data_dir, args.revision, args.ttl_hours)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"ERRO: {exc}", file=sys.stderr)
+            return 2
+        allow = sum(1 for r in recs if r["action_allowed"])
+        print(f"[+] {len(recs)} recibos p/ '{args.program}' "
+              f"({allow} include / {len(recs) - allow} exclude), expira {recs[0]['expires_at']}",
+              file=sys.stderr)
+        print(json.dumps([{**r["asset"], "allow": r["action_allowed"]} for r in recs],
+                         ensure_ascii=False, indent=2))
         return 0
     if args.command == "check":
         receipt = authorization_for(args.target)

@@ -96,6 +96,37 @@ python3 -m pip install --quiet --user requests pyyaml 2>/dev/null || pip3 instal
 # opcional: resolve_doh.py usa curl_cffi (impersona Chrome no DNS-over-HTTPS)
 python3 -m pip install --quiet --user curl_cffi 2>/dev/null || true
 
+# ---------------------------------------------------------------------------
+# 8.5) Ferramentas de mineração web/mobile (jsrecon.py / apkrecon.py)
+# ---------------------------------------------------------------------------
+# jsrecon.py: stdlib puro (urllib/re) — nenhuma dependência a instalar.
+# apkrecon.py: funciona só com stdlib + `strings`/`unzip`, MAS enriquece muito com
+#   aapt/apktool/jadx (AndroidManifest binário → deep-links, componentes exported) e
+#   adb (adb pull do APK de um device). apkeep = baixador de APK (APKPure/Play/F-Droid).
+# Tudo best-effort: se faltar, o apkrecon degrada com aviso, não quebra.
+echo "[*] ferramentas web/mobile (apkrecon): instalando aapt/apktool/jadx/adb (opcional)..."
+pkg_try() {  # tenta cada nome candidato; nunca falha o script
+  for name in "$@"; do
+    # shellcheck disable=SC2086
+    $PKG "$name" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+# strings/unzip: base (binutils/unzip)
+command -v strings >/dev/null 2>&1 || pkg_try binutils || true
+command -v unzip   >/dev/null 2>&1 || pkg_try unzip || true
+# adb (adb pull do APK instalado)
+command -v adb >/dev/null 2>&1 || pkg_try android-tools-adb android-tools platform-tools android-platform-tools || true
+# apktool + aapt (AndroidManifest binário → xmltree)
+command -v apktool >/dev/null 2>&1 || pkg_try apktool android-apktool || true
+command -v aapt    >/dev/null 2>&1 || command -v aapt2 >/dev/null 2>&1 || pkg_try aapt android-sdk-build-tools android-tools || true
+# jadx (decompilação Java opcional p/ análise profunda)
+command -v jadx >/dev/null 2>&1 || pkg_try jadx || true
+# apkeep: baixador de APK que contorna mirrors (via cargo, se houver Rust)
+if ! command -v apkeep >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+  echo "[*] instalando apkeep via cargo (baixador de APK)..."; cargo install apkeep >/dev/null 2>&1 || true
+fi
+
 # 9) garantir go/bin no PATH do shell
 case "${SHELL:-}" in
   *zsh) SHELL_RC="$HOME/.zshrc" ;;
@@ -114,9 +145,19 @@ echo "== Verificação =="
 for t in subfinder httpx katana nuclei dnsx gau waybackurls amass gospider gf ffuf; do
   if command -v "$t" >/dev/null 2>&1; then printf "  \033[32mOK\033[0m   %s\n" "$t"; else printf "  \033[31mFALTA\033[0m %s\n" "$t"; fi
 done
+echo "  -- mineração web/mobile (jsrecon/apkrecon) --"
+printf "  \033[32mOK\033[0m   jsrecon.py (stdlib puro)\n"
+printf "  \033[32mOK\033[0m   apkrecon.py (stdlib + strings/unzip)\n"
+for t in strings unzip adb apktool aapt jadx apkeep; do
+  if command -v "$t" >/dev/null 2>&1; then printf "  \033[32mOK\033[0m   %s\n" "$t"; else printf "  \033[33mopt\033[0m  %s (opcional — apkrecon degrada sem ele)\n" "$t"; fi
+done
 echo ""
 echo "Pronto. Próximos passos:"
 echo "  python3 tools/brain.py init"
+echo "  mineração de SPA:  python3 tools/jsrecon.py https://<host-autorizado> --context passkey"
+echo "  mineração de APK:  python3 tools/apkrecon.py <app.apk|.xapk> --scope <dominios> --save <scratch>"
+echo "  recon passivo agg: python3 tools/passive.py <dom1> <dom2> --diff-program <id> --data-dir <hive-data>"
+echo "  recibos (1 cmd):   python3 tools/hive_scope_cache.py record-scope <program> --revision <sha256> --data-dir <hive-data>"
 echo "  configure o MCP hive_mind e HIVE_DATA_DIR/HIVE_BIN no writer"
 echo "  python3 tools/hive_workspace.py catalog"
 echo "  antes de recon: hive_get_context + tools/hive_scope_cache.py record"
