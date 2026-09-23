@@ -63,8 +63,10 @@ def main():
         doms = a.domains.split(",")
         out, err = run(["passive.py", *doms, "--diff-program", a.program, "--data-dir", a.data_dir], 300)
         new_hosts = [h for h in section(out, "PROD novo no Hive") if re.match(r'^[a-z0-9.\-]+$', h)]
-        print(f"═══ 1) PASSIVE ═══  {len(new_hosts)} host(s) PROD novo(s) vs Hive")
-        for h in new_hosts[:40]:
+        deltafile = os.path.join(a.scratch, "_new_hosts.txt")
+        open(deltafile, "w").write("\n".join(new_hosts) + "\n")
+        print(f"═══ 1) PASSIVE ═══  {len(new_hosts)} host(s) PROD novo(s) vs Hive  (lista completa: {deltafile})")
+        for h in new_hosts:
             print(f"   🆕 {h}")
         if err.strip():
             print(f"   (notas: {err.strip().splitlines()[-1][:80]})")
