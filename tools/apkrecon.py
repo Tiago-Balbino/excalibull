@@ -20,21 +20,26 @@ import argparse, os, re, shutil, subprocess, sys, tempfile, zipfile
 from urllib.parse import urlparse
 
 # ---- regexes ----
-RE_URL   = re.compile(rb'https?://[A-Za-z0-9.\-]+\.[A-Za-z]{2,}(?:/[A-Za-z0-9_\-./:{}$?=&%~]*)?')
-RE_HOST  = re.compile(rb'\b(?:[a-z0-9](?:[a-z0-9\-]{0,62})\.)+(?:worldcoin|world|toolsforhumanity|worldcoin-distributors)\.(?:org|dev|com|app)\b', re.I)
-RE_PATH  = re.compile(rb'["\'\x60](/(?:api|v1|v2|v3|graphql|gql|auth|oauth2?|oidc|rpc|mobile|wallet|pay|payment|tx|transaction|transfer|device|token|verify|session|user|users|me|account|balance|nullifier|proof|attestation)[A-Za-z0-9_\-./:{}$]*)')
-RE_SCHEME= re.compile(rb'\b([a-z][a-z0-9+.\-]{2,30})://')  # deep-link schemes
-RE_FIRE  = re.compile(rb'[a-z0-9\-]+\.(?:firebaseio\.com|firebaseapp\.com|appspot\.com)|gs://[a-z0-9._\-]+')
-RE_GKEY  = re.compile(rb'AIza[0-9A-Za-z_\-]{35}')
-RE_SECRET= re.compile(rb'AKIA[0-9A-Z]{16}|sk_live_[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[0-9A-Za-z\-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{6,}')
-RE_PIN   = re.compile(rb'sha256/[A-Za-z0-9+/]{43}=')
+# Padrões compartilhados vêm de extract.py (fonte única, variante BYTES). O
+# RE_HOST agora é GENÉRICO (sem alvo hardcoded) — o filtro de escopo (--scope,
+# ver main) decide o que é in-scope. Antes só casava domínios worldcoin.
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+from extract import mask, in_scope, patterns  # noqa: E402
+
+_P = patterns(as_bytes=True)
+RE_URL   = _P.url
+RE_HOST  = _P.host           # genérico; filtragem por escopo é feita em main()
+RE_PATH  = _P.api_path
+RE_SCHEME = _P.scheme
+RE_FIRE  = _P.firebase
+RE_GKEY  = _P.gkey
+RE_SECRET = _P.secret
+RE_PIN   = re.compile(rb'sha256/[A-Za-z0-9+/]{43}=')  # cert pins (específico do apkrecon)
 TEXT_ASSET = re.compile(r'\.(bundle|js|json|jsbundle|txt|xml|env|cfg|properties|graphql|proto)$', re.I)
 COMMON_SCHEMES = {b'http', b'https', b'content', b'file', b'android', b'market', b'tel',
                   b'mailto', b'sms', b'geo', b'data', b'javascript', b'about', b'ftp'}
-
-def mask(s):
-    s = s.decode('utf-8', 'replace') if isinstance(s, bytes) else s
-    return s[:6] + "…" + s[-4:] if len(s) > 14 else s[:4] + "…"
 
 def py_strings(data, minlen):
     out, cur = [], bytearray()
@@ -159,7 +164,7 @@ def main():
         print(f"\n===== {title} ({len(items)}) =====")
         for x in items[:limit]: print(x)
 
-    tgt = {h for h in hosts if h and (not scopes or any(h == s or h.endswith("." + s) for s in scopes))}
+    tgt = {h for h in hosts if h and (not scopes or in_scope(h, scopes))}
     api = sorted(p for p in paths if re.search(r'/(api|v1|v2|v3|graphql|gql|auth|oauth|oidc|rpc|token|verify|device|pay|wallet|tx|transfer|balance|nullifier|proof|me|account|session)(/|$|\?|\b)', p))
     dump("HOSTS (in-scope)" if scopes else "HOSTS", tgt)
     if scopes: dump("HOSTS (fora do escopo / 3rd-party)", hosts - tgt, 120)

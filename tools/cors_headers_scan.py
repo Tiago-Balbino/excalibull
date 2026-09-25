@@ -196,6 +196,15 @@ def main():
     if not targets:
         ap.error("informe ao menos um alvo (arg ou -f)")
 
+    # Fail-closed: este scanner faz tráfego DIRETO (probes CORS/headers) — exige
+    # recibo do Hive p/ TODO alvo antes de disparar (mesma autoridade do scope_hook).
+    import os as _os
+    _tools_dir = _os.path.dirname(_os.path.abspath(__file__))
+    if _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
+    from hive_scope_cache import require_authorized
+    require_authorized(targets, tool_name="cors_headers_scan.py")
+
     verify = not args.insecure
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:

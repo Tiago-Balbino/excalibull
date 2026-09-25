@@ -16,31 +16,33 @@ O host precisa de recibo do Hive (o scope_hook do Bash valida na chamada).
 Uso:
   python3 tools/jsrecon.py https://developer.world.org [--max-js 40] [--scope world.org,worldcoin.org]
 """
-import argparse, gzip, io, os, re, sys, urllib.request, urllib.error
+import argparse, gzip, io, json, os, re, sys, urllib.request, urllib.error
 from urllib.parse import urljoin, urlparse
 
-UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+from extract import mask, in_scope, PATTERNS_TEXT, DEFAULT_UA  # noqa: E402
+from netcommon import RateLimiter, http_get  # noqa: E402
+
+UA = DEFAULT_UA
+
+# Rate-limit compartilhado (reentrante, thread-safe). 0 = sem limite. Ajustado
+# por --rate no main(). Alvos manual-only (ex.: NBA --rate 3) EXIGEM throttle:
+# o BFS de bundles senão vira scanner automatizado.
+_LIMITER = RateLimiter(0.0)
 
 def fetch(url, timeout=15):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Encoding": "gzip"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-            if r.headers.get("Content-Encoding") == "gzip":
-                raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
-            return raw.decode("utf-8", "replace"), r.status
-    except urllib.error.HTTPError as e:
-        return "", e.code
-    except Exception as e:
-        return "", f"ERR:{type(e).__name__}"
+    # Delega ao GET compartilhado (gzip + retry/backoff + throttle).
+    return http_get(url, timeout=timeout, limiter=_LIMITER)
 
 # ---- regexes de extração ----
 RE_SCRIPT   = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
 RE_NEXTBUILD= re.compile(r'/_next/static/([^/"\']+)/_(?:buildManifest|ssgManifest)\.js')
-RE_PATH     = re.compile(r'["\'\x60](/(?:api|v1|v2|v3|graphql|gql|auth|oauth2?|oidc|admin|internal|user|users|me|account|wallet|pay|payment|transaction|device|token|verify|session|_next/data)[A-Za-z0-9_\-./:{}$]*)["\'\x60]')
+# RE_PATH e RE_URL vêm de extract.py (fonte única; keyword-set é a UNIÃO).
+RE_PATH     = PATTERNS_TEXT.api_path
 RE_ABSPATH  = re.compile(r'["\'\x60](/[A-Za-z0-9_\-]{1,40}(?:/[A-Za-z0-9_\-.:{}$]{1,40}){1,6})["\'\x60]')
-RE_URL      = re.compile(r'https?://[A-Za-z0-9.\-]+\.[A-Za-z]{2,}(?:/[A-Za-z0-9_\-./:{}$?=&%]*)?')
+RE_URL      = PATTERNS_TEXT.url
 RE_GQL      = re.compile(r'(?:operationName["\']?\s*[:=]\s*["\']([A-Za-z0-9_]+)|(?:query|mutation|subscription)\s+([A-Za-z][A-Za-z0-9_]+)\s*[\({])')
 RE_ENV      = re.compile(r'(NEXT_PUBLIC_[A-Z0-9_]+|REACT_APP_[A-Z0-9_]+)["\']?\s*[:=]\s*["\']([^"\']{0,80})')
 RE_JSPATH   = re.compile(r'["\'\x60](/[A-Za-z0-9_\-./]+?\.m?js)["\'\x60]')
@@ -61,13 +63,9 @@ FINGERPRINTS = [
     (r'_next/static|__NEXT_DATA__', "Next.js",
      "rotas /api/* server-side · __NEXT_DATA__ props/flags · _buildManifest p/ rotas ocultas"),
 ]
-RE_SECRET   = re.compile(r'(AKIA[0-9A-Z]{16}|sk_live_[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}|AIza[0-9A-Za-z_\-]{30,}|xox[baprs]-[0-9A-Za-z\-]{10,})')
-
-def mask(s):
-    return s[:6] + "…" + s[-4:] if len(s) > 14 else s[:3] + "…"
-
-def in_scope(host, scopes):
-    return any(host == s or host.endswith("." + s) for s in scopes)
+# Segredos + google-key de extract.py (fonte única). mask/in_scope idem.
+RE_SECRET   = PATTERNS_TEXT.secret
+RE_GKEY     = PATTERNS_TEXT.gkey
 
 def main():
     ap = argparse.ArgumentParser()
@@ -77,7 +75,13 @@ def main():
     ap.add_argument("--timeout", type=float, default=15)
     ap.add_argument("--context", default="", help="csv de keywords: dump de ~90 chars ao redor de cada ocorrência")
     ap.add_argument("--save", default="", help="dir p/ salvar os bundles baixados (grep offline)")
+    ap.add_argument("--json", action="store_true",
+                    help="emite resultado estruturado em JSON (consumido pelo saquear.py)")
+    ap.add_argument("--rate", type=float, default=0.0,
+                    help="máx req/s (throttle antes de cada fetch). 0 = sem limite. "
+                         "Alvos manual-only exigem (ex.: NBA --rate 3).")
     a = ap.parse_args()
+    _LIMITER.set_rate(a.rate)
     scopes = [s.strip() for s in a.scope.split(",") if s.strip()]
     base = f"{urlparse(a.url).scheme}://{urlparse(a.url).netloc}"
 
@@ -134,19 +138,12 @@ def main():
         for k, v in RE_ENV.findall(text):  envs.add(f"{k}={v}")
         for sm in RE_SOURCEMAP.findall(text): smaps.add(urljoin(src, sm))
         for s in RE_SECRET.findall(text):  secrets.add(mask(s))
+        for g in RE_GKEY.findall(text):    secrets.add(mask(g))
 
-    def dump(title, items, limit=250):
-        items = sorted(items)
-        print(f"\n===== {title} ({len(items)}) =====")
-        for x in items[:limit]: print(x)
-
+    # --- computa tudo primeiro (a saída — texto ou JSON — só formata isto) ---
     tgt_hosts = {h for h in hosts if (not scopes or in_scope(h, scopes))}
     api_paths = sorted(p for p in paths if re.search(r'/(api|v1|v2|v3|graphql|gql|auth|oauth|oidc|token|verify|device|pay|wallet|admin|internal|me|account|session)(/|$|\?)', p))
-    dump("API ENDPOINTS (alto valor)", api_paths)
-    dump("OUTRAS ROTAS", set(paths) - set(api_paths), 200)
-    dump("HOSTS (in-scope)" if scopes else "HOSTS", tgt_hosts)
-    dump("GRAPHQL OPS", gqls)
-    dump("ENV/CONFIG expostos", envs)
+    other_paths = sorted(set(paths) - set(api_paths))
 
     # __NEXT_DATA__ (SSR): vaza runtimeConfig/env/apiUrl/flags
     nd = set()
@@ -154,7 +151,6 @@ def main():
         blob = m.group(1)
         for k, v in re.findall(r'"([A-Za-z0-9_]*(?:url|Url|URL|api|API|endpoint|host|Host|env|baseUrl|clientId|domain|audience)[A-Za-z0-9_]*)"\s*:\s*"([^"]{1,120})"', blob):
             nd.add(f"{k} = {v}")
-    dump("__NEXT_DATA__ (config/URLs SSR)", nd, 60)
 
     # SOURCE MAPS: valida de verdade (fetch) — .map real começa com {"version":3
     real_maps = set()
@@ -164,17 +160,47 @@ def main():
             real_maps.add(f"{sm}  [HTTP {st}] ★ MAP REAL (fonte recuperável)")
         else:
             real_maps.add(f"{sm}  [HTTP {st}] (fallback/não-map)")
-    dump("SOURCE MAPS (validados)", real_maps)
 
     # FINGERPRINT DE STACK -> PLAYBOOK dirigido
     joined = "\n".join(corpus.values())
+    fingerprints = [{"name": name, "playbook": playbook}
+                    for pat, name, playbook in FINGERPRINTS if re.search(pat, joined, re.I)]
+
+    # --- saída JSON (consumida pelo saquear.py) ---
+    if a.json:
+        print(json.dumps({
+            "url": a.url,
+            "api_endpoints": api_paths,
+            "other_paths": other_paths,
+            "hosts": sorted(tgt_hosts),
+            "graphql_ops": sorted(gqls),
+            "env_config": sorted(envs),
+            "next_data": sorted(nd),
+            "source_maps": sorted(real_maps),
+            "fingerprints": fingerprints,
+            "secrets_masked": sorted(secrets),
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --- saída texto (uso manual) ---
+    def dump(title, items, limit=250):
+        items = sorted(items)
+        print(f"\n===== {title} ({len(items)}) =====")
+        for x in items[:limit]: print(x)
+
+    dump("API ENDPOINTS (alto valor)", api_paths)
+    dump("OUTRAS ROTAS", other_paths, 200)
+    dump("HOSTS (in-scope)" if scopes else "HOSTS", tgt_hosts)
+    dump("GRAPHQL OPS", gqls)
+    dump("ENV/CONFIG expostos", envs)
+    dump("__NEXT_DATA__ (config/URLs SSR)", nd, 60)
+    dump("SOURCE MAPS (validados)", real_maps)
+
     print("\n===== STACK FINGERPRINT -> PLAYBOOK =====")
-    hit = False
-    for pat, name, playbook in FINGERPRINTS:
-        if re.search(pat, joined, re.I):
-            hit = True
-            print(f"  ● {name}\n      → {playbook}")
-    if not hit:
+    if fingerprints:
+        for fp in fingerprints:
+            print(f"  ● {fp['name']}\n      → {fp['playbook']}")
+    else:
         print("  (nenhuma assinatura conhecida — inspecione ENV/rotas manualmente)")
 
     if secrets:

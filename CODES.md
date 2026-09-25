@@ -158,6 +158,16 @@ Gatilho: o Tiago aponta um achado (endpoint + request/response + impacto alegado
 8. Registrar no brain (WAL) e publicar o veredito, inclusive falso positivo/descartado, no Hive.
 Postura: **pessimista por padrão.** Melhor derrubar 3 achados fracos aqui do que queimar credibilidade.
 
+### `protocolo matriz de exaustão` — não desistir cedo (§5) ⚔️
+Objetivo: **garantir ataque de verdade** antes de marcar um lead como morto. Par do
+`contra-prova` (anti-FP); este é o anti-desistência-precoce. Operacionaliza THE-MIND §5.
+Gatilho: um lead PASS/candidato de uma classe (IDOR/BAC/XSS/SSRF/lógica/redirect…).
+1. **Abrir** a matriz: `python3 tools/exhaustion.py open <program> <lead-id> --class <classe> --endpoint <ep> [--param <p>]`. Gera as células (posição × método × encoding × bypass).
+2. **Atacar e marcar** cada célula (sob recibo): `mark <program> <lead-id> <cell> pass|fail|blocked|na`. `next` sugere as de maior valor; `status` mostra a cobertura.
+3. **Fechar** só de dois jeitos: cobertura **≥80%** OU `fp <program> <lead-id> --reason "..."` (contra-prova = FP legítimo, ver §3.1: 3 re-enquadramentos + matriz cheia).
+4. Só então `brain.py record <program> exhausted "<lead-id>: ..."`. O hook `giveup_guard` (estrito) **bloqueia** essa declaração enquanto a matriz do lead não estiver completa/FP.
+Nota: a matriz é checklist/estado — **não emite tráfego**; cada célula é testada por você sob o gate de recibo. Estado em `brain/exhaustion/` (WAL).
+
 ### `protocolo report` — rascunho de report + checklist
 Só para achado que passou no `contra-prova` como `ACHADO` (idealmente após `escada de jacó`).
 1. Montar o report: título específico (≤80 chars se H1), resumo (2-3 linhas), severidade justificada

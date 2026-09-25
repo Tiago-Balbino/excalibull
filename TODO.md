@@ -12,19 +12,22 @@ Lista de tarefas pra executar no futuro. Marque `[x]` ao concluir.
   muda como o The Mind pensa. Validar se `code 7 send/find` e o resto
   seguem o padrão, ou se convém reorganizar.
 
-## Construção do cérebro (pendente do plano de criação)
+## Construção do cérebro (CONCLUÍDA — arquivos existem no repo)
 
-- [ ] `THE-MIND.md` — método (6 perguntas) + princípios sempre-ativos + roteador +
+> Atualizado 2026-09-25: os arquivos abaixo já existem e estão em uso. Seção
+> mantida como registro do que foi construído.
+
+- [x] `THE-MIND.md` — método (6 perguntas) + princípios sempre-ativos + roteador +
   brain persistente + log de decisões.
-- [ ] `rules/` — destilar em PT: `never-submit.md`, `chain-table.md`, `identities.md`,
+- [x] `rules/` — destilar em PT: `never-submit.md`, `chain-table.md`, `identities.md`,
   `mistakes.md`, `techniques.md`, `waf-bypass.md`, `vendor-fingerprints.md`;
   copiar cru: `payloads.md`; + `rules/README.md` (índice).
-- [ ] `tools/` — portar `brain.py` + `file_safety.py` + guards
+- [x] `tools/` — portar `brain.py` + `file_safety.py` + guards
   (`scope_hook`, `scope_check`, `validity_guard`, `file_path_guard`, `cvss_version_guard`)
   + `seal_gate.py`; criar `.claude/settings.json` (hooks).
 - [x] `CODES.md` — modelo religado ao Hive/brain/rules/hooks.
-- [ ] `memory/` — `patterns.md` (P1–P8), `arsenal.md`, `signals.md`, `sources.md`, `README.md`.
-- [ ] Passe final — cross-refs, dry-run mental ponta a ponta, `git init` + 1º commit.
+- [x] `memory/` — `patterns.md` (P1–P8), `arsenal.md`, `signals.md`, `sources.md`, `README.md`.
+- [x] Passe final — cross-refs, dry-run mental ponta a ponta, `git init` + 1º commit.
 
 ## Migração Hive Mind
 
@@ -57,11 +60,11 @@ pentest-agents ficaram de fora por escopo. Ordem por valor pro fluxo:
 
 ## Ideias / backlog
 
-- [ ] **Corrigir auto-load do cofre (`.secrets/autoload.sh`)** — a var não carrega
-  automático na Bash tool: o guard por `$PWD` no `autoload.sh` não bate porque o `~/.zshrc`
-  parece ser sourceado antes de o shell estar no dir do projeto (`BUGCROWD_USERNAME` sai
-  vazio). Investigar PWD no source-time; opções: remover o guard de `$PWD`, casar por
-  `$CLAUDE_PROJECT_DIR`, ou usar hook `chpwd` do zsh. Gatilho já está no `~/.zshrc:111`.
+- [x] **Corrigir auto-load do cofre (`.secrets/autoload.sh`)** — resolvido 2026-09-25:
+  o `autoload.sh` agora carrega o cofre quando `$PWD` está no projeto **OU** quando
+  `$CLAUDE_PROJECT_DIR` aponta pro projeto (a Bash tool do Claude Code exporta essa var),
+  cobrindo o caso do `~/.zshrc` sourceado fora do dir. Verificado: `BUGCROWD_USERNAME`
+  carrega mesmo rodando de `/tmp`.
 - [ ] (adicione aqui conforme surgirem)
 
 ## Protocolo backstage (modo offline) — a construir

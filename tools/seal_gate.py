@@ -20,7 +20,7 @@ Exit 0 = Selo pode fechar. Exit 1 = falta item (lista o que falta). Exit 2 = alv
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 _TOOLS = Path(__file__).resolve().parent
@@ -34,7 +34,20 @@ PROJECT_ROOT = _TOOLS.parent
 TARGETS_DIR = PROJECT_ROOT / "targets"
 
 
+def _today_candidates() -> list[str]:
+    """Datas 'de hoje' aceitas: local E UTC (distintas).
+
+    hive_workspace.py carimba o handoff em UTC; o operador pode estar num fuso
+    atrás/à frente. Perto da meia-noite as duas datas divergem — aceitar ambas
+    evita reprovar o selo por diferença de fuso.
+    """
+    local = datetime.now().strftime("%Y-%m-%d")
+    utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return [local] if local == utc else [local, utc]
+
+
 def _today() -> str:
+    """Rótulo humano de 'hoje' (local) para mensagens."""
     return datetime.now().strftime("%Y-%m-%d")
 
 
@@ -53,7 +66,7 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
         )
     else:
         ltxt = log.read_text(encoding="utf-8", errors="ignore")
-        if _today() not in ltxt:
+        if not any(day in ltxt for day in _today_candidates()):
             problems.append(
                 f"a-cacada-ate-aqui.md sem bloco de hoje ({_today()}) — registre o que rodou nesta sessão."
             )
@@ -79,7 +92,8 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
         for folder in ("notes", "evidence"):
             base = program_dir / folder
             if base.is_dir():
-                candidates.extend(base.glob(f"*-excalibull-*-{_today()}.md"))
+                for day in _today_candidates():
+                    candidates.extend(base.glob(f"*-excalibull-*-{day}.md"))
         if not candidates:
             problems.append(
                 "handoff Hive de hoje ausente — use `tools/hive_workspace.py note` e depois "

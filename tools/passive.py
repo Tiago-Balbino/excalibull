@@ -14,14 +14,52 @@ Uso:
       --data-dir /.../hive_instance/data
   python3 tools/passive.py exemplo.com          # sem diff, só agrega
 """
-import argparse, base64, gzip, io, json, os, re, sys, urllib.request, urllib.error
+import argparse, base64, gzip, hashlib, io, json, os, re, sys, time, urllib.request, urllib.error
+import concurrent.futures as _cf
+from pathlib import Path
 from urllib.parse import urlparse, quote
 
-UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+from extract import DEFAULT_UA  # noqa: E402  (UA único do projeto)
+
+UA = DEFAULT_UA
 NONPROD = re.compile(r'(^|[.\-])(staging|stage|dev|development|test|testing|qa|uat|sandbox|'
                      r'internal|preview|canary|demo|sepolia|devnet|testnet|e2e|local)([.\-]|$)', re.I)
 HOSTRE = re.compile(r'^(?:[a-z0-9](?:[a-z0-9\-]{0,62})\.)+[a-z]{2,}$')
+
+# Cache entre runs por (fonte, domínio). .hive/ é gitignored (efêmero).
+CACHE_DIR = Path(_TOOLS_DIR).parent / ".hive" / "passive-cache"
+
+
+def _cache_path(name, d):
+    key = hashlib.sha1(f"{name}|{d}".encode()).hexdigest()[:16]
+    return CACHE_DIR / f"{name}-{key}.json"
+
+
+def _cache_get(name, d, ttl):
+    if ttl <= 0:
+        return None
+    p = _cache_path(name, d)
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if time.time() - obj.get("ts", 0) > ttl:
+        return None
+    return obj
+
+
+def _cache_put(name, d, hosts, urls, status):
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _cache_path(name, d).write_text(json.dumps({
+            "ts": time.time(), "status": status,
+            "hosts": sorted(hosts), "urls": sorted(urls),
+        }), encoding="utf-8")
+    except OSError:
+        pass
 
 def fetch(url, timeout=25, headers=None):
     h = {"User-Agent": UA, "Accept-Encoding": "gzip"}
@@ -183,32 +221,95 @@ def known_from_hive(program, data_dir):
                 if c: known.add(c)
     return known, "ok"
 
+# (nome, função, kind) — kind='hosts' devolve (hosts,status); 'urls' devolve (hosts,urls,status)
+_HOST_SOURCES = (("crt.sh", src_crtsh), ("otx", src_otx), ("hackertarget", src_hackertarget),
+                 ("virustotal", src_vt), ("securitytrails", src_strails), ("shodan", src_shodan),
+                 ("censys", src_censys))
+_URL_SOURCES = (("urlscan", src_urlscan), ("wayback", src_wayback))
+
+
+def _run_source(name, fn, d, kind, ttl):
+    """Roda uma fonte (com cache) e normaliza p/ (name, d, hosts, urls, status)."""
+    cached = _cache_get(name, d, ttl)
+    if cached is not None:
+        return name, d, set(cached["hosts"]), set(cached.get("urls", [])), cached["status"] + " [cache]"
+    if kind == "urls":
+        hosts, urls, status = fn(d)
+    else:
+        hosts, status = fn(d)
+        urls = set()
+    if status == "ok":  # só cacheia sucesso (erro/transitório não vira cache)
+        _cache_put(name, d, hosts, urls, status)
+    return name, d, hosts, urls, status
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("domains", nargs="+", help="domínios base (ex.: worldcoin.org world.org)")
     ap.add_argument("--diff-program", default="", help="program_id p/ diff vs Hive")
     ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""), help="dir do Hive")
     ap.add_argument("--urls", action="store_true", help="também listar URLs (urlscan+wayback)")
+    ap.add_argument("--workers", type=int, default=10, help="fetches paralelos (fontes×domínios)")
+    ap.add_argument("--cache-ttl", type=int, default=3600,
+                    help="segundos de cache por (fonte,domínio); 0 desliga. Default 1h.")
+    ap.add_argument("--json", action="store_true",
+                    help="emite resultado estruturado em JSON (consumido pelo saquear.py)")
     a = ap.parse_args()
 
-    all_hosts, all_urls, report = set(), set(), []
+    # Monta as tarefas (domínio × fonte) e roda em paralelo — antes era sequencial
+    # (~9 fontes × N domínios), o maior gargalo do passive.
+    tasks = []
     for d in a.domains:
-        for name, fn in (("crt.sh", src_crtsh), ("otx", src_otx), ("hackertarget", src_hackertarget),
-                         ("virustotal", src_vt), ("securitytrails", src_strails), ("shodan", src_shodan),
-                         ("censys", src_censys)):
-            hosts, status = fn(d)
+        for name, fn in _HOST_SOURCES:
+            tasks.append((name, fn, d, "hosts"))
+        for name, fn in _URL_SOURCES:
+            tasks.append((name, fn, d, "urls"))
+
+    all_hosts, all_urls, results = set(), set(), []
+    with _cf.ThreadPoolExecutor(max_workers=max(1, a.workers)) as ex:
+        futs = [ex.submit(_run_source, name, fn, d, kind, a.cache_ttl)
+                for (name, fn, d, kind) in tasks]
+        for fut in _cf.as_completed(futs):
+            name, d, hosts, urls, status = fut.result()
             all_hosts |= hosts
-            report.append(f"  {d:22} {name:14} {len(hosts):5} hosts  [{status}]")
-        for name, fn in (("urlscan", src_urlscan), ("wayback", src_wayback)):
-            hosts, urls, status = fn(d)
-            all_hosts |= hosts; all_urls |= urls
-            report.append(f"  {d:22} {name:14} {len(hosts):5} hosts {len(urls):5} urls [{status}]")
+            all_urls |= urls
+            results.append((d, name, len(hosts), len(urls), status))
+
+    # ordena p/ saída determinística (paralelismo embaralha a ordem de chegada)
+    report = [f"  {d:22} {name:14} {nh:5} hosts {nu:5} urls [{st}]"
+              for (d, name, nh, nu, st) in sorted(results)]
 
     # filtra por escopo (só hosts sob os domínios pedidos)
     scoped = {h for h in all_hosts if any(h == d or h.endswith("." + d) for d in a.domains)}
     prod = sorted(h for h in scoped if not NONPROD.search(h))
     nonprod = sorted(h for h in scoped if NONPROD.search(h))
 
+    # calcula delta vs Hive (independe do formato de saída)
+    new_prod, new_nonprod, known_n = None, None, None
+    if a.diff_program and a.data_dir:
+        known, st = known_from_hive(a.diff_program, a.data_dir)
+        known_n = len(known)
+        new_prod = [h for h in prod if h not in known]
+        new_nonprod = [h for h in nonprod if h not in known]
+
+    scoped_urls = sorted(u for u in all_urls if any(d in u for d in a.domains))
+
+    # --- saída JSON (consumida pelo saquear.py) ---
+    if a.json:
+        print(json.dumps({
+            "domains": a.domains,
+            "prod": prod,
+            "nonprod": nonprod,
+            "delta_prod": new_prod,          # None se sem --diff-program
+            "delta_nonprod": new_nonprod,
+            "known_in_hive": known_n,
+            "urls": scoped_urls,
+            "sources": [{"domain": d, "source": n, "hosts": nh, "urls": nu, "status": st}
+                        for (d, n, nh, nu, st) in sorted(results)],
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --- saída texto (uso manual) ---
     print("===== FONTES =====")
     print("\n".join(report))
     print(f"\n===== TOTAL (escopo) ===== {len(scoped)} hosts ({len(prod)} prod / {len(nonprod)} não-prod)")
@@ -217,10 +318,7 @@ def main():
         if not a.data_dir:
             print("\n[!] --diff-program precisa de --data-dir (ou HIVE_DATA_DIR)", file=sys.stderr)
         else:
-            known, st = known_from_hive(a.diff_program, a.data_dir)
-            print(f"\n[*] Hive '{a.diff_program}': {len(known)} hosts conhecidos [{st}]", file=sys.stderr)
-            new_prod = [h for h in prod if h not in known]
-            new_nonprod = [h for h in nonprod if h not in known]
+            print(f"\n[*] Hive '{a.diff_program}': {known_n} hosts conhecidos", file=sys.stderr)
             print(f"\n===== 🆕 DELTA — PROD novo no Hive ({len(new_prod)}) =====")
             for h in new_prod: print(h)
             print(f"\n===== 🆕 DELTA — não-prod novo ({len(new_nonprod)}) =====")
@@ -230,9 +328,8 @@ def main():
         print(f"\n===== NÃO-PROD ({len(nonprod)}) ===="); [print(h) for h in nonprod[:120]]
 
     if a.urls:
-        su = sorted(u for u in all_urls if any(d in u for d in a.domains))
-        print(f"\n===== URLs ({len(su)}) =====")
-        for u in su[:400]: print(u)
+        print(f"\n===== URLs ({len(scoped_urls)}) =====")
+        for u in scoped_urls[:400]: print(u)
     print(f"\n[*] {len(all_urls)} URLs totais coletadas (use --urls)", file=sys.stderr)
 
 if __name__ == "__main__":

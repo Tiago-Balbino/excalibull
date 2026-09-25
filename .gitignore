@@ -10,6 +10,7 @@ brain/techniques/
 brain/patterns/
 brain/sessions/
 brain/circuit-breaker.json
+brain/exhaustion/
 !brain/MEMORY.md
 
 # targets/ é scratch efêmero; conteúdo canônico de alvo vive no Hive Mind.

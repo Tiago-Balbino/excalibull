@@ -53,7 +53,9 @@ pentest-agents está anotada pra rastreio.
 - **§5 — Exaustão exige matriz de mutação.** Nunca marque uma classe "exaurida" com uma
   família de payload só. Mínimo ~30 combinações: **vetor × método × encoding × bypass**
   (query/path/body/header; GET/POST/PUT/PATCH/DELETE; raw/url/duplo/unicode/stacked;
-  parser-diff). *(pa: Rule 24)*
+  parser-diff). Operacionalizado por `tools/exhaustion.py` (matriz por lead) + o
+  `giveup_guard` (estrito): não dá pra `brain.py record ... exhausted` sem a matriz do lead
+  ≥80% coberta OU fechada como FP (contra-prova). *(pa: Rule 24)*
 - **§6 — Teste diferencial > resposta única.** Compare pares/trios, não respostas soltas:
   auth vs unauth, 2 papéis, 2 parsers/content-types, antes vs depois de mutar estado. O
   delta (latência, cache-key, campo, side-effect) é o sinal. *(pa: Rule 25)*

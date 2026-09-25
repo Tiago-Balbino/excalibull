@@ -15,9 +15,11 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -209,10 +211,34 @@ def record_scope(program: str, data_dir: str, revision: str,
         raise ValueError("program ausente")
     if not revision or not isinstance(revision, str):
         raise ValueError("--revision (sha256 do `scope approve`) obrigatório: prova de aprovacao")
+    # Anti-forja: exige que a revisão tenha FORMA de sha256 (64 hex). Não impede
+    # todo abuso, mas fecha o caso trivial (agente passar 'approved'/palavra solta).
+    # Vincular ao valor real exigiria o Hive expor a revisão do `scope approve`
+    # (o binário Go a computa internamente; canonicalização desconhecida aqui —
+    # por isso NÃO hard-falhamos no mismatch, só auditamos + avisamos).
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", revision.strip()):
+        raise ValueError(
+            "--revision deve ser um sha256 (64 hex) do `scope approve`; "
+            f"recebido {revision!r:.40} — nao parece um hash de aprovacao."
+        )
+    revision = revision.strip().lower()
     scope_path = Path(data_dir).expanduser() / "programs" / program / "scope.json"
     if not scope_path.is_file():
         raise ValueError(f"scope.json nao encontrado: {scope_path}")
-    manifest = json.loads(scope_path.read_text(encoding="utf-8"))
+    scope_bytes = scope_path.read_bytes()
+    scope_sha256 = hashlib.sha256(scope_bytes).hexdigest()
+    manifest = json.loads(scope_bytes.decode("utf-8"))
+    # Hash canônico (ordem de chaves estável) — audita drift do conteúdo.
+    canonical_sha256 = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if revision not in (scope_sha256, canonical_sha256):
+        print(
+            f"[!] aviso: --revision nao bate com sha256 do scope.json "
+            f"(raw={scope_sha256[:12]}… / canonical={canonical_sha256[:12]}…). "
+            "Confirme que rodou `scope approve` na versao atual do escopo.",
+            file=sys.stderr,
+        )
     if manifest.get("program_id") not in (None, program):
         raise ValueError("program_id do scope.json nao bate com o argumento")
     valid = {"host", "wildcard_domain", "ip", "cidr", "url_prefix"}
@@ -232,6 +258,7 @@ def record_scope(program: str, data_dir: str, revision: str,
             "confirmed": allowed,
             "action_allowed": allowed,
             "scope_revision": revision,
+            "scope_sha256": scope_sha256,
             "matched_rules": [rule],
             "recorded_at": _iso(now),
             "expires_at": expires,
@@ -240,6 +267,52 @@ def record_scope(program: str, data_dir: str, revision: str,
         raise ValueError("nenhuma regra valida no scope.json")
     _save_cache({"schema_version": SCHEMA_VERSION, "receipts": kept + new})
     return new
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def preflight(hosts) -> list[tuple[str, bool, str]]:
+    """Checa autorização de cada host. Retorna (host, ok, motivo). Loopback → ok."""
+    seen, results = set(), []
+    for raw in hosts:
+        host = _hostname(str(raw))
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        if _is_loopback_host(host):
+            results.append((host, True, "loopback"))
+            continue
+        r = authorization_for(host)
+        ok = bool(r and r.get("action_allowed") is True)
+        reason = "ok" if ok else ("sem recibo vigente" if not r else f"status={r.get('status')}")
+        results.append((host, ok, reason))
+    return results
+
+
+def require_authorized(hosts, tool_name: str = "tool") -> None:
+    """Preflight fail-closed p/ tools que fazem tráfego DIRETO (recon/cors_headers).
+
+    Se algum host não tiver recibo `action_allowed=true`, imprime o motivo e
+    encerra (SystemExit 2) ANTES de qualquer request. Espelha a autoridade
+    exclusiva do Hive que o scope_hook aplica ao Bash. Loopback é isento.
+    """
+    problems = [(h, why) for (h, ok, why) in preflight(hosts) if not ok]
+    if problems:
+        sys.stderr.write(
+            f"🚫 {tool_name}: BLOQUEADO (Hive fail-closed) — sem autorizacao vigente para:\n"
+            + "".join(f"   - {h}: {why}\n" for h, why in problems)
+            + "Rode hive_get_context no asset exato e "
+              "`python3 tools/hive_scope_cache.py record <ctx.json>` (exija action_allowed=true).\n"
+            "Scope local em targets/ nao concede autorizacao.\n"
+        )
+        raise SystemExit(2)
 
 
 def main(argv: list[str] | None = None) -> int:

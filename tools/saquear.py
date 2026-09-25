@@ -17,7 +17,7 @@ Uso:
      --spa-hosts developer.world.org,coreapp.worldcoin.org \
      --data-dir /.../hive_instance/data --scratch /tmp/saque
 """
-import argparse, os, re, subprocess, sys, tempfile
+import argparse, json, os, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -31,17 +31,33 @@ def run(cmd, timeout=300):
     except Exception as e:
         return "", f"__err__ {type(e).__name__}: {e}"
 
-def section(text, header, stop=("=====", "[*]")):
-    """extrai as linhas de uma seção '===== HEADER ...' até o próximo marcador."""
-    out, on = [], False
-    for line in text.splitlines():
-        if on and any(line.strip().startswith(s) for s in stop):
-            break
-        if on and line.strip():
-            out.append(line.strip())
-        if header in line:
-            on = True
-    return out
+def parse_json(out):
+    """Parseia o stdout --json de um sub-tool; devolve dict ou None (contrato robusto).
+
+    Substitui o scraping frágil de headers de stdout: os sub-tools agora emitem
+    JSON estruturado (passive/jsrecon --json).
+    """
+    try:
+        return json.loads(out)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+# --- extração do contrato JSON dos sub-tools (helpers puros, testáveis) ---
+def new_hosts_from_passive(data):
+    """delta_prod do passive --json (hosts PROD novos vs Hive)."""
+    return list((data or {}).get("delta_prod") or [])
+
+
+def endpoints_from_jsrecon(host, data):
+    """linhas '<host> <path>' dos api_endpoints do jsrecon --json."""
+    eps = [p for p in (data or {}).get("api_endpoints", []) if isinstance(p, str) and p.startswith("/")]
+    return [f"{host} {p}" for p in eps]
+
+
+def stacks_from_jsrecon(data):
+    """lista de {name, playbook} dos fingerprints do jsrecon --json."""
+    return [fp for fp in (data or {}).get("fingerprints", []) if isinstance(fp, dict) and fp.get("name")]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -49,46 +65,56 @@ def main():
     ap.add_argument("--domains", default="", help="csv p/ passive (ex.: worldcoin.org,world.org)")
     ap.add_argument("--spa-hosts", default="", help="csv de SPA hosts p/ jsrecon ativo")
     ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
-    ap.add_argument("--scratch", default=tempfile.mkdtemp(prefix="saque_"))
+    ap.add_argument("--scratch", default="",
+                    help="dir de scratch (default: cria um tmp saque_*). Não é criado no --help.")
     ap.add_argument("--max-js", type=int, default=40)
+    ap.add_argument("--rate", type=float, default=0.0,
+                    help="máx req/s repassado ao jsrecon (alvos manual-only, ex.: NBA 3)")
     a = ap.parse_args()
     if not a.data_dir:
         ap.error("passe --data-dir ou defina HIVE_DATA_DIR")
+    # cria o scratch só na execução real (antes era default de argparse → rodava
+    # até no --help, deixando dirs tmp órfãos a cada invocação)
+    a.scratch = a.scratch or tempfile.mkdtemp(prefix="saque_")
     os.makedirs(a.scratch, exist_ok=True)
     print(f"⛴️  SAQUEAR NAVIOS — {a.program}  (scratch: {a.scratch})\n")
 
-    # 1) PASSIVE + diff vs Hive
+    # 1) PASSIVE + diff vs Hive  (consome JSON estruturado)
     new_hosts = []
     if a.domains:
         doms = a.domains.split(",")
-        out, err = run(["passive.py", *doms, "--diff-program", a.program, "--data-dir", a.data_dir], 300)
-        new_hosts = [h for h in section(out, "PROD novo no Hive") if re.match(r'^[a-z0-9.\-]+$', h)]
+        out, err = run(["passive.py", *doms, "--diff-program", a.program,
+                        "--data-dir", a.data_dir, "--json"], 300)
+        data = parse_json(out)
+        new_hosts = new_hosts_from_passive(data)
         deltafile = os.path.join(a.scratch, "_new_hosts.txt")
         open(deltafile, "w").write("\n".join(new_hosts) + "\n")
         print(f"═══ 1) PASSIVE ═══  {len(new_hosts)} host(s) PROD novo(s) vs Hive  (lista completa: {deltafile})")
         for h in new_hosts:
             print(f"   🆕 {h}")
-        if err.strip():
-            print(f"   (notas: {err.strip().splitlines()[-1][:80]})")
+        if data is None and err.strip():
+            print(f"   (passive não retornou JSON — nota: {err.strip().splitlines()[-1][:80]})")
 
-    # 2) JSRECON por SPA host  (endpoints + fingerprint)
+    # 2) JSRECON por SPA host  (endpoints + fingerprint via JSON)
     ep_lines = []
     if a.spa_hosts:
         print(f"\n═══ 2) JSRECON (SPA) ═══")
         for host in a.spa_hosts.split(","):
             host = host.strip()
             out, err = run(["jsrecon.py", f"https://{host}", "--max-js", str(a.max_js),
-                            "--save", os.path.join(a.scratch, host)], 240)
-            eps = section(out, "API ENDPOINTS")
-            fps = section(out, "STACK FINGERPRINT")
-            for p in eps:
-                if p.startswith("/"):
-                    ep_lines.append(f"{host} {p}")
-            print(f"   ● {host}: {len(eps)} endpoints · stacks: "
-                  + (", ".join(f.lstrip('● ').split(' ')[0] for f in fps if f.startswith('●')) or "—"))
-            for f in fps:
-                if f.startswith("●") or f.startswith("→"):
-                    print(f"       {f}")
+                            *(["--rate", str(a.rate)] if a.rate and a.rate > 0 else []),
+                            "--json", "--save", os.path.join(a.scratch, host)], 240)
+            data = parse_json(out)
+            if data is None:
+                print(f"   ● {host}: (jsrecon não retornou JSON) {err.strip().splitlines()[-1][:60] if err.strip() else ''}")
+                continue
+            host_eps = endpoints_from_jsrecon(host, data)
+            fps = stacks_from_jsrecon(data)
+            ep_lines.extend(host_eps)
+            print(f"   ● {host}: {len(host_eps)} endpoints · stacks: "
+                  + (", ".join(fp["name"] for fp in fps) or "—"))
+            for fp in fps:
+                print(f"       ● {fp['name']}\n       → {fp.get('playbook','')}")
 
     # 3) MERGE no corpus de endpoints (dedupe + diff)
     if ep_lines:

@@ -270,6 +270,13 @@ def main():
     ap.add_argument("--workers", type=int, default=30)
     a = ap.parse_args()
     a.domain = a.domain.lower().strip().replace("https://", "").replace("http://", "").strip("/")
+    # Fail-closed: recon ativo faz tráfego DIRETO — exige recibo do Hive p/ o
+    # domínio antes de qualquer request (mesma autoridade que o scope_hook do Bash).
+    _tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
+    from hive_scope_cache import require_authorized
+    require_authorized([a.domain], tool_name="recon.py")
     pipeline(a.domain, a)
 
 if __name__ == "__main__":

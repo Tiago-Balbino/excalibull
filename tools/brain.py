@@ -25,7 +25,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Absolute import so tools/ can be run from any CWD (tests exercise this path).
@@ -253,6 +253,18 @@ _STATUS_ICON = {
 VALID_STATUSES = sorted(_STATUS_TAG)
 
 
+def _locked_append(path: Path, text: str) -> None:
+    """Append serializado (flock por sidecar) + escrita atômica.
+
+    O WAL pode ter escritores concorrentes (subagents/autopilot); um
+    open(...,'a') solto perde dados numa corrida. Espelha a garantia que o
+    grafo de capacidades já tinha.
+    """
+    with locked_file(path):
+        existing = path.read_text() if path.exists() else ""
+        atomic_write_text(path, existing + text)
+
+
 def _touch_last_updated(target_file: Path) -> None:
     """Refresh `last_updated:` in the target file's YAML frontmatter.
 
@@ -261,19 +273,22 @@ def _touch_last_updated(target_file: Path) -> None:
     literal appeared elsewhere (e.g., inside recorded notes), and silently
     did nothing when the date line was absent. `re.sub(count=1)` targets
     only the first occurrence, which is the frontmatter line.
+
+    Read-modify-write serializado (lock) + escrita atômica.
     """
-    content = target_file.read_text()
-    new_content, n = re.subn(
-        r"^last_updated:.*$",
-        f"last_updated: {today()}",
-        content,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    if n == 0:
-        # Frontmatter missing this line — append it once rather than silently skip.
-        new_content = content.rstrip() + f"\nlast_updated: {today()}\n"
-    target_file.write_text(new_content)
+    with locked_file(target_file):
+        content = target_file.read_text()
+        new_content, n = re.subn(
+            r"^last_updated:.*$",
+            f"last_updated: {today()}",
+            content,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        if n == 0:
+            # Frontmatter missing this line — append it once rather than silently skip.
+            new_content = content.rstrip() + f"\nlast_updated: {today()}\n"
+        atomic_write_text(target_file, new_content)
 
 
 def record_result(brain_dir: Path, target: str, status: str, technique: str, details: str):
@@ -291,15 +306,12 @@ def record_result(brain_dir: Path, target: str, status: str, technique: str, det
 
     if status == "potential":
         # Rich block in the target file — hunters read this back verbatim.
-        with open(target_file, "a") as f:
-            f.write(f"\n### {technique}\n- Status: POTENTIAL\n- {details}\n")
+        _locked_append(target_file, f"\n### {technique}\n- Status: POTENTIAL\n- {details}\n")
     else:
         technique_filename = _STATUS_TO_TECHNIQUE_FILE.get(status)
         if technique_filename:
-            with open(brain_dir / "techniques" / technique_filename, "a") as f:
-                f.write(entry + "\n")
-        with open(target_file, "a") as f:
-            f.write(f"\n- [{_STATUS_TAG[status]}] {technique} — {details}\n")
+            _locked_append(brain_dir / "techniques" / technique_filename, entry + "\n")
+        _locked_append(target_file, f"\n- [{_STATUS_TAG[status]}] {technique} — {details}\n")
 
     _touch_last_updated(target_file)
     print(f"{_STATUS_ICON[status]} Recorded {status}: {target} | {technique}")
@@ -376,8 +388,7 @@ def append_session_log(brain_dir: Path, message: str):
     log = log_dir / f"{today()}.md"
     if not log.exists():
         log.write_text(f"# Session Log — {today()}\n\n")
-    with open(log, "a") as f:
-        f.write(f"- {timestamp()} {message}\n")
+    _locked_append(log, f"- {timestamp()} {message}\n")
 
 
 def _capability_graph_path(brain_dir: Path) -> Path:
@@ -513,12 +524,13 @@ def list_capabilities(brain_dir: Path, target: str = ""):
 def record_endpoint(brain_dir: Path, target: str, endpoint: str, status: str, vuln_class: str = "", details: str = ""):
     """Track individual endpoint test status (I1)."""
     target_file = ensure_target_file(brain_dir, target)
-    content = target_file.read_text()
     entry = f"[{timestamp()}] [{status.upper()}] {endpoint} ({vuln_class}) — {details}"
-    if "## Tested Endpoints" not in content:
-        content += "\n## Tested Endpoints\n"
-    content += f"\n{entry}"
-    target_file.write_text(content)
+    with locked_file(target_file):
+        content = target_file.read_text()
+        if "## Tested Endpoints" not in content:
+            content += "\n## Tested Endpoints\n"
+        content += f"\n{entry}"
+        atomic_write_text(target_file, content)
     print(f"📍 Endpoint recorded: {endpoint} → {status}")
 
 
@@ -546,6 +558,53 @@ def list_endpoints(brain_dir: Path, target: str, status_filter: str = ""):
             print(f"  {t}")
     else:
         print(f"No endpoints recorded for {target}")
+
+
+# --- Circuit breaker (I2) ---
+# Ferramenta de importação (ex.: autopilot): interrompe requests a um host que
+# falha em série. Antes ficava DEPOIS do `__main__` (indefinida quando rodado
+# como script) e comparava datas naive; agora é UTC-aware, atômica e serializada.
+
+def _circuit_path(brain_dir: Path) -> Path:
+    return brain_dir / "circuit-breaker.json"
+
+
+def check_circuit(brain_dir: Path, host: str) -> bool:
+    """True se é seguro prosseguir (circuito fechado) para o host."""
+    cb_file = _circuit_path(brain_dir)
+    with locked_file(cb_file):
+        data = load_json_or_quarantine(cb_file, dict)
+        entry = data.get(host, {})
+        fails = entry.get("consecutive_fails", 0)
+        if fails >= 5:
+            backoff_until = entry.get("backoff_until", "")
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if backoff_until and now_iso < backoff_until:
+                print(f"⚡ Circuit OPEN for {host} — {fails} falhas seguidas. Backoff até {backoff_until}")
+                return False
+            entry["consecutive_fails"] = 0  # reset após o backoff
+            data[host] = entry
+            atomic_write_text(cb_file, json.dumps(data, indent=2))
+    return True
+
+
+def record_circuit(brain_dir: Path, host: str, success: bool) -> None:
+    """Registra o resultado de um request p/ o circuit breaker do host."""
+    cb_file = _circuit_path(brain_dir)
+    with locked_file(cb_file):
+        data = load_json_or_quarantine(cb_file, dict)
+        entry = data.get(host, {"consecutive_fails": 0, "total_requests": 0})
+        entry["total_requests"] = entry.get("total_requests", 0) + 1
+        if success:
+            entry["consecutive_fails"] = 0
+            entry.pop("backoff_until", None)
+        else:
+            entry["consecutive_fails"] = entry.get("consecutive_fails", 0) + 1
+            if entry["consecutive_fails"] >= 5:
+                entry["backoff_until"] = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+                print(f"⚡ Circuit TRIPPED for {host} — backoff 60s")
+        data[host] = entry
+        atomic_write_text(cb_file, json.dumps(data, indent=2))
 
 
 def main():
@@ -636,46 +695,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# --- Circuit breaker (I2) ---
-
-def check_circuit(brain_dir: Path, host: str) -> bool:
-    """Check if circuit breaker is tripped for a host. Returns True if safe to proceed."""
-    cb_file = brain_dir / "circuit-breaker.json"
-    if not cb_file.exists():
-        return True
-    import json as _json
-    data = _json.loads(cb_file.read_text())
-    entry = data.get(host, {})
-    fails = entry.get("consecutive_fails", 0)
-    if fails >= 5:
-        backoff_until = entry.get("backoff_until", "")
-        if backoff_until and datetime.now().isoformat() < backoff_until:
-            print(f"⚡ Circuit OPEN for {host} — {fails} consecutive failures. Backoff until {backoff_until}")
-            return False
-        # Reset after backoff
-        entry["consecutive_fails"] = 0
-        data[host] = entry
-        cb_file.write_text(_json.dumps(data, indent=2))
-    return True
-
-
-def record_circuit(brain_dir: Path, host: str, success: bool):
-    """Record a request result for circuit breaker tracking."""
-    import json as _json
-    cb_file = brain_dir / "circuit-breaker.json"
-    data = _json.loads(cb_file.read_text()) if cb_file.exists() else {}
-    entry = data.get(host, {"consecutive_fails": 0, "total_requests": 0})
-    entry["total_requests"] = entry.get("total_requests", 0) + 1
-    if success:
-        entry["consecutive_fails"] = 0
-    else:
-        entry["consecutive_fails"] = entry.get("consecutive_fails", 0) + 1
-        if entry["consecutive_fails"] >= 5:
-            # Backoff 60 seconds
-            from datetime import timedelta
-            entry["backoff_until"] = (datetime.now() + timedelta(seconds=60)).isoformat()
-            print(f"⚡ Circuit TRIPPED for {host} — backing off 60s")
-    data[host] = entry
-    cb_file.write_text(_json.dumps(data, indent=2))
