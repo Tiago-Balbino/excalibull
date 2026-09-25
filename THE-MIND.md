@@ -69,7 +69,8 @@ pentest-agents está anotada pra rastreio.
   marcar cobertura. *(pa: Rule 30)*
 - **§10 — Classes menos saturadas + siga o dinheiro.** Fuja de XSS/redirect/headers óbvios;
   vá em cache poisoning, race, lógica, smuggling, SAML/OAuth. Billing/refund/wallet = onde o
-  dev corta atalho. *(pa: Rule 6/11)*
+  dev corta atalho. Operacionalizado por `tools/target_model.py` (`enumerate` rankeia por esta
+  prioridade + pesos que o alvo ensina via vereditos; `simulate` decide o ataque do mecanismo). *(pa: Rule 6/11)*
 - **§11 — Never-submit.** Achado da lista de kill instantâneo (headers ausentes, redirect
   sozinho, SSRF DNS-only, CORS wildcard sem exfil, self-XSS, clickjacking sem ação
   sensível…) **não se reporta sem chain**. Lista completa em [[rules/never-submit]]. *(pa: Rule 19)*

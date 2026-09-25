@@ -285,11 +285,13 @@ Guardrails: **só passivo** (herda `postura escudo` de fato — zero toque ativo
 
 ### `protocolo descobrir a roda` — reconstruir a máquina a partir das peças
 Pré-requisito: `targets/<alvo>/arapuca.md` com peças. Roda quando a caçada empaca ou a arapuca tem 8+ peças.
-1. **Reconstruir o sistema** (o modelo): de tudo descoberto → arquitetura, quem chama quem, fronteiras de confiança, camadas de auth, onde o estado vive. Seção "Modelo do sistema" na arapuca.
-2. **Eng. reversa das suposições:** por componente/fronteira, rodar as 6 perguntas mirando a costura.
-3. **Mapa do não-testado:** todo endpoint/param/método/fluxo/host que apareceu no recon e nunca foi sondado, rankeado por fragilidade.
-4. **Cadeias narrativas:** multi-passo com história (A → estado B → habilita C → impacto D).
-5. **Priorizar e devolver** pro `modo hunter`/`lança`. Cada inferência marcada como hipótese.
+**Respaldado por `tools/target_model.py`** (modelo persistente em `brain/model/`, análise pura, sem tráfego):
+1. **Reconstruir o sistema** (o modelo): `import-jsrecon`/`import-passive` (auto do `--json`) + `add-object/add-auth/add-boundary/add-component` (fatos curados: arquitetura, quem chama quem, fronteiras de confiança, camadas de auth, onde o estado vive). `show` renderiza a seção "Modelo do sistema" p/ a arapuca.
+2. **Eng. reversa das suposições:** `enumerate` cruza componente × primitiva (catálogo de signals/arsenal/chain-table) → leads rankeados (§10 + pesos aprendidos + chains via capability-graph). `simulate <jwt|oauth|hmac|state>` decide quais ataques do mecanismo valem disparar.
+3. **Mapa do não-testado:** `untested` — endpoint/param/método/fluxo/host do recon nunca sondado, por fragilidade.
+4. **Cadeias narrativas:** leads marcados `chain` quando há enabler no capability-graph (A → habilita C).
+5. **Priorizar e devolver** pro `modo hunter`/`lança`; `enumerate --seed-matrix` abre as matrizes de exaustão. Cada lead é hipótese `[UNTESTED]`.
+**Aprende sozinho:** `record-verdict <lead> <achado|fp|...>` re-ajusta os pesos (FP rebaixa a classe; achado sobe + promove irmãos, §3) — o alvo ensina o modelo a priorizar o que paga ali.
 
 ### `protocolo escada de jacó` — subir um achado real até o teto
 Pré-requisito: um `[ACHADO]` confirmado. Roda **antes do `report`**.
