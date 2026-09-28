@@ -1,131 +1,166 @@
 #!/usr/bin/env python3
-"""saquear — orquestrador do `protocolo saquear navios` (mineração encadeada).
+"""Saquear o navio: recon web médio/completo, JS e auditoria CORS/headers opcional.
 
-Um comando encadeia o pipeline de mineração e consolida tudo no Hive:
-  1. passive.py  → agrega hosts de fontes 3rd-party + DIFF vs Hive (delta novo)
-  2. jsrecon.py  → em cada SPA host autorizado: endpoints + STACK FINGERPRINT→playbook
-  3. endpoints.py → mescla os endpoints achados no corpus canônico (dedupe + diff)
-  4. imprime o "saque": hosts novos, endpoints novos, stacks/playbooks
-
-Passos que ficam com o AGENTE (não automatizáveis aqui): hive_get_context/record-scope
-(recibo), semear hipóteses no WAL, e captura de XHR autenticado via browser.
-
-Requer recibo vigente p/ os hosts ativos (o scope_hook gateia na invocação Bash).
-Uso:
-  python3 tools/saquear.py toolsforhumanity \
-     --domains worldcoin.org,world.org \
-     --spa-hosts developer.world.org,coreapp.worldcoin.org \
-     --data-dir /.../hive_instance/data --scratch /tmp/saque
+Tráfego autenticado e revisitas com diff pertencem ao pérola negra.
 """
-import argparse, json, os, subprocess, sys, tempfile
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from browser_recon import authorized
+from file_safety import atomic_write_text
+from hive_instance import workspace
+from hive_workspace import _program
+from recon_records import normalize_record
+from session_monitor import tool_metric
+
+ROOT = Path(__file__).resolve().parent
+_INSTANCE = None
+_PROGRAM = None
+
 
 def run(cmd, timeout=300):
+    started = time.monotonic()
+    env = os.environ.copy()
+    if _INSTANCE:
+        env["HIVE_INSTANCE_DIR"] = _INSTANCE
     try:
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", cmd[0]), *cmd[1:]],
-                           capture_output=True, text=True, timeout=timeout, cwd=ROOT)
-        return r.stdout, r.stderr
-    except subprocess.TimeoutExpired:
-        return "", f"__timeout__ {cmd[0]}"
-    except Exception as e:
-        return "", f"__err__ {type(e).__name__}: {e}"
+        r = subprocess.run([sys.executable, str(ROOT / cmd[0]), *cmd[1:]],
+                           capture_output=True, text=True, timeout=timeout, env=env)
+        tool_metric(cmd[0], time.monotonic() - started, r.returncode == 0, _PROGRAM)
+        return r.stdout, r.stderr, r.returncode
+    except (OSError, subprocess.TimeoutExpired):
+        tool_metric(cmd[0], time.monotonic() - started, False, _PROGRAM)
+        return "", "falha/timeout da ferramenta", 2
+
 
 def parse_json(out):
-    """Parseia o stdout --json de um sub-tool; devolve dict ou None (contrato robusto).
-
-    Substitui o scraping frágil de headers de stdout: os sub-tools agora emitem
-    JSON estruturado (passive/jsrecon --json).
-    """
     try:
-        return json.loads(out)
-    except (json.JSONDecodeError, TypeError):
+        result = json.loads(out)
+        return result if isinstance(result, dict) else None
+    except (ValueError, TypeError):
         return None
 
 
-# --- extração do contrato JSON dos sub-tools (helpers puros, testáveis) ---
 def new_hosts_from_passive(data):
-    """delta_prod do passive --json (hosts PROD novos vs Hive)."""
     return list((data or {}).get("delta_prod") or [])
 
 
 def endpoints_from_jsrecon(host, data):
-    """linhas '<host> <path>' dos api_endpoints do jsrecon --json."""
     eps = [p for p in (data or {}).get("api_endpoints", []) if isinstance(p, str) and p.startswith("/")]
     return [f"{host} {p}" for p in eps]
 
 
 def stacks_from_jsrecon(data):
-    """lista de {name, playbook} dos fingerprints do jsrecon --json."""
     return [fp for fp in (data or {}).get("fingerprints", []) if isinstance(fp, dict) and fp.get("name")]
 
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("program")
-    ap.add_argument("--domains", default="", help="csv p/ passive (ex.: worldcoin.org,world.org)")
-    ap.add_argument("--spa-hosts", default="", help="csv de SPA hosts p/ jsrecon ativo")
-    ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
-    ap.add_argument("--scratch", default="",
-                    help="dir de scratch (default: cria um tmp saque_*). Não é criado no --help.")
+    global _INSTANCE, _PROGRAM
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("program", type=_program)
+    ap.add_argument("--domains", default="", help="CSV para fontes de terceiros")
+    ap.add_argument("--spa-hosts", "--hosts", dest="spa_hosts", default="", help="hosts explícitos")
+    ap.add_argument("--url", action="append", default=[])
+    ap.add_argument("--level", choices=["medium", "full"], default="medium")
+    ap.add_argument("--cors", action="store_true", help="auditar CORS/headers dos URLs explícitos")
+    ap.add_argument("--skip-crawl", action="store_true")
+    ap.add_argument("--skip-js", action="store_true")
+    ap.add_argument("--max-pages", type=int)
     ap.add_argument("--max-js", type=int, default=40)
-    ap.add_argument("--rate", type=float, default=0.0,
-                    help="máx req/s repassado ao jsrecon (alvos manual-only, ex.: NBA 3)")
+    ap.add_argument("--rate", type=float, default=1)
+    ap.add_argument("--instance")
+    ap.add_argument("--data-dir")
+    ap.add_argument("--scratch")
     a = ap.parse_args()
-    if not a.data_dir:
-        ap.error("passe --data-dir ou defina HIVE_DATA_DIR")
-    # cria o scratch só na execução real (antes era default de argparse → rodava
-    # até no --help, deixando dirs tmp órfãos a cada invocação)
-    a.scratch = a.scratch or tempfile.mkdtemp(prefix="saque_")
-    os.makedirs(a.scratch, exist_ok=True)
-    print(f"⛴️  SAQUEAR NAVIOS — {a.program}  (scratch: {a.scratch})\n")
-
-    # 1) PASSIVE + diff vs Hive  (consome JSON estruturado)
-    new_hosts = []
+    _PROGRAM = a.program
+    if a.max_js < 0 or a.rate <= 0 or (a.max_pages is not None and a.max_pages < 1):
+        ap.error("limites inválidos")
+    if not (a.domains or a.spa_hosts or a.url):
+        ap.error("informe domínios passivos ou hosts/URLs explícitos")
+    info = workspace(a.data_dir, a.instance, writer=True)
+    _INSTANCE = info["instance_root"]
+    data_dir = info["data_dir"]
+    scratch = Path(a.scratch or tempfile.mkdtemp(prefix="saque_"))
+    scratch.mkdir(parents=True, exist_ok=True)
+    report = {"program_id": a.program, "protocol": "saquear-o-navio", "level": a.level,
+              "steps": [], "publication": "pending-ingest-idle-readback"}
+    records = []
     if a.domains:
-        doms = a.domains.split(",")
-        out, err = run(["passive.py", *doms, "--diff-program", a.program,
-                        "--data-dir", a.data_dir, "--json"], 300)
+        out, _, rc = run(["passive.py", *[d.strip() for d in a.domains.split(",") if d.strip()],
+                          "--diff-program", a.program, "--data-dir", data_dir, "--json"])
         data = parse_json(out)
-        new_hosts = new_hosts_from_passive(data)
-        deltafile = os.path.join(a.scratch, "_new_hosts.txt")
-        open(deltafile, "w").write("\n".join(new_hosts) + "\n")
-        print(f"═══ 1) PASSIVE ═══  {len(new_hosts)} host(s) PROD novo(s) vs Hive  (lista completa: {deltafile})")
-        for h in new_hosts:
-            print(f"   🆕 {h}")
-        if data is None and err.strip():
-            print(f"   (passive não retornou JSON — nota: {err.strip().splitlines()[-1][:80]})")
-
-    # 2) JSRECON por SPA host  (endpoints + fingerprint via JSON)
-    ep_lines = []
-    if a.spa_hosts:
-        print(f"\n═══ 2) JSRECON (SPA) ═══")
-        for host in a.spa_hosts.split(","):
-            host = host.strip()
-            out, err = run(["jsrecon.py", f"https://{host}", "--max-js", str(a.max_js),
-                            *(["--rate", str(a.rate)] if a.rate and a.rate > 0 else []),
-                            "--json", "--save", os.path.join(a.scratch, host)], 240)
+        atomic_write_text(scratch / "passive.json", json.dumps(data or {}, ensure_ascii=False, indent=2))
+        errors = any(str(s.get("status", "")).lower().startswith(("err", "timeout", "fail")) for s in (data or {}).get("sources", []))
+        report["steps"].append({"step": "passive", "status": "partial" if rc or data is None or errors else "collected",
+                                "new_hosts": new_hosts_from_passive(data),
+                                "new_nonprod_count": len((data or {}).get("delta_nonprod") or [])})
+    urls = list(dict.fromkeys(a.url + [f"https://{h.strip()}/" for h in a.spa_hosts.split(",") if h.strip()]))
+    for index, url in enumerate(urls):
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            ap.error("URL HTTP(S) sem credenciais necessária")
+        host = parsed.hostname.lower()
+        if not authorized(url, a.program):
+            report["steps"].append({"step": "authorization", "host": host, "status": "blocked"})
+            continue
+        if not a.skip_crawl:
+            cmd = ["active_recon.py", a.program, url, "--level", a.level, "--rate", str(a.rate)]
+            if a.max_pages is not None:
+                cmd += ["--max-pages", str(a.max_pages)]
+            out, _, rc = run(cmd, 600)
             data = parse_json(out)
-            if data is None:
-                print(f"   ● {host}: (jsrecon não retornou JSON) {err.strip().splitlines()[-1][:60] if err.strip() else ''}")
-                continue
-            host_eps = endpoints_from_jsrecon(host, data)
-            fps = stacks_from_jsrecon(data)
-            ep_lines.extend(host_eps)
-            print(f"   ● {host}: {len(host_eps)} endpoints · stacks: "
-                  + (", ".join(fp["name"] for fp in fps) or "—"))
-            for fp in fps:
-                print(f"       ● {fp['name']}\n       → {fp.get('playbook','')}")
+            if data:
+                records.extend(data.get("records", []))
+            report["steps"].append({"step": "crawl", "host": host,
+                                    "status": (data or {}).get("coverage", {}).get("status", "failed") if rc in (0, 1) else "failed",
+                                    "coverage": (data or {}).get("coverage", {})})
+        if not a.skip_js:
+            out, _, rc = run(["jsrecon.py", url, "--program", a.program, "--max-js", str(a.max_js),
+                              "--rate", str(a.rate), "--json"], 600)
+            data = parse_json(out)
+            if data and rc == 0:
+                records.extend(data.get("records", []))
+            report["steps"].append({"step": "js", "host": host,
+                                    "status": (data or {}).get("coverage", {}).get("status", "failed") if rc == 0 else "failed",
+                                    "coverage": (data or {}).get("coverage", {}),
+                                    "stacks": [fp["name"] for fp in stacks_from_jsrecon(data)]})
+        if a.cors:
+            target = scratch / f"cors-{index}.json"
+            _, _, rc = run(["cors_headers_scan.py", url, "--program", a.program, "--rate", str(a.rate),
+                            "--workers", "1", "--json", str(target)], 300)
+            report["steps"].append({"step": "cors-headers", "host": host, "status": "collected" if rc == 0 else "partial"})
+    records = [normalize_record(r) for r in records]
+    epf = scratch / "endpoints.json"
+    atomic_write_text(epf, json.dumps({"program_id": a.program, "records": records}, ensure_ascii=False, indent=2))
+    if records:
+        _, _, rc = run(["endpoints.py", "merge", a.program, "--input", str(epf), "--source", "saquear", "--data-dir", data_dir], 60)
+        report["steps"].append({"step": "merge", "status": "written" if rc == 0 else "failed"})
+    report["record_count"] = len(records)
+    report["status"] = "partial" if any(s["status"] not in ("collected", "written") for s in report["steps"]) else "collected"
+    atomic_write_text(scratch / "saquear-coverage.json", json.dumps(report, ensure_ascii=False, indent=2))
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    notes = Path(data_dir) / "programs" / a.program / "notes"
+    fm = (f"---\nprogram_id: {a.program}\ndocument_type: note\nclassification: internal\n"
+          f"source: excalibull\ncollected_at: {stamp}\ntags: [excalibull, recon-coverage]\n"
+          f"asset_refs: {json.dumps(sorted({urlsplit(u).hostname for u in urls}))}\n---\n")
+    atomic_write_text(notes / f"excalibull-saquear-coverage-{stamp[:10]}.md",
+                      fm + "# Saquear o navio — cobertura\n\n~~~json\n" + json.dumps(report, ensure_ascii=False, indent=2) + "\n~~~\n")
+    print(f"Saquear o navio: {len(records)} registros; coleta {report['status']}.")
+    print("Desenvolver sinais pelos protocolos; publicar/ingerir → idle → read-back. Publicação pendente.")
+    return 1 if report["status"] == "partial" else 0
 
-    # 3) MERGE no corpus de endpoints (dedupe + diff)
-    if ep_lines:
-        epf = os.path.join(a.scratch, "_endpoints.txt")
-        open(epf, "w").write("\n".join(sorted(set(ep_lines))) + "\n")
-        out, err = run(["endpoints.py", "merge", a.program, "--input", epf,
-                        "--source", "saquear", "--data-dir", a.data_dir], 60)
-        print(f"\n═══ 3) CORPUS DE ENDPOINTS ═══\n   {err.strip() or out.strip()}")
-
-    print(f"\n⚓ Saque pronto. Próximo (AGENTE): record-scope p/ hosts novos → hipóteses (code 6) "
-          f"→ ingest_workspace + read-back. Bundles salvos em {a.scratch}")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, TypeError):
+        print("Saquear falhou; confira configuração/artefatos. Publicação pendente.", file=sys.stderr)
+        sys.exit(2)

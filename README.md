@@ -13,7 +13,7 @@ Framework pessoal de bug bounty com método de caçada, regras verificáveis e o
 |---|---|
 | Hive Mind | Fonte canônica de scope, policy, recon, endpoints, evidências, findings e resultados negativos. |
 | `THE-MIND.md` | Método, princípios e roteamento do Excalibull. |
-| `CODES.md` | Contrato dos códigos, protocolos e modos. |
+| `CODES.md` | Contrato dos códigos, protocolos, modos e posturas. |
 | `memory/` e `rules/` | Conhecimento transversal e regras; não guardam estado específico de alvo. |
 | `brain/` | Write-ahead log local da sessão; deve ser destilado e publicado no Hive. |
 | `targets/` | Scratch efêmero para ferramentas, evidências locais e drafts; nunca concede escopo. |
@@ -27,7 +27,8 @@ board ↔ local nem duas fontes de verdade.
 Configure o MCP `hive_mind` no cliente. Writers também definem:
 
 ```bash
-export HIVE_DATA_DIR=/caminho/privado/hive-data
+export HIVE_INSTANCE_DIR=/caminho/hive_instance
+# HIVE_DATA_DIR é lido de config/hive.toml; overrides devem coincidir.
 export HIVE_BIN=/caminho/hive_instance/bin/hive-teste
 export HIVE_TEAM_TAG=team-a
 export HIVE_HANDLE=seu-handle
@@ -40,7 +41,7 @@ fechada.
 ## Fluxo de caçada
 
 ```text
-portfolio.md / hive_workspace.py catalog
+Hive / hive_workspace.py catalog
              │ escolhe program_id explícito
              ▼
 code 7 find <program_id> [asset]
@@ -49,7 +50,7 @@ code 7 find <program_id> [asset]
 modo hunter on
              │ scratch em targets/ + WAL em brain/
              ▼
-contra-prova → escada de jacó → report
+postura → protocolos conforme necessidade → contra prova → report PT/EN
              │
              ▼
 handoff Hive com resultados positivos E negativos
@@ -77,20 +78,24 @@ materializam o que o Hive retornou.
 
 | Código | Ação |
 |---|---|
-| `code 0 <program> <asset>` | Recon completo autorizado; destila resultado no Hive. |
-| `code 1 <program> <asset>` | Recon passivo; consulta o histórico do Hive primeiro. |
-| `code 2 <program> <url>` | Scan pontual após confirmação de escopo. |
-| `code 3 <program>` | Prepara programa/nota; `scope.json` requer operador. |
+| `code 3` | Auxiliar de casa nova; cria ficha no writer, sem aprovar escopo. |
 | `code 5 <program> <vuln>` | Dupcheck no Hive + fontes públicas. |
-| `code 6 <program>` | Hipóteses a partir de Hive + scratch + memória transversal. |
 | `code 7` | Catálogo/status do Hive. |
 | `code 7 find <program> [asset]` | Contexto ao vivo; não copia ficha. |
 | `code 7 send <program>` | Publica handoff, ingere, espera e faz read-back. |
 | `code 8 <program>` | Brief combinado: Hive primeiro, brain local depois. |
 | `code 9` | Estado local + `get_sync_status`. |
-| `code 10/11` | Aprendizado de submissão e quality gate. |
+| `code 10` | Registrar decisão de método. |
+| `code 11` | Quality gate dos rascunhos. |
+| `code 12` | Learn: desfecho de submissão. |
 
-Definição completa: `CODES.md`.
+Protocolos principais: casa nova, contra prova, report, achar o x, saquear o
+navio, pérola negra, seguir o rastro, escada de jacó, formação de tridente e
+monitor de métricas. Hunter/bicicleta
+permanecem ativos, perguntam postura ao iniciar e são exclusivos de dojo.
+
+Definições: [CODES.md](CODES.md). Uso: [recon](docs/RECON-AMPLIADO.md) e
+[monitor](docs/MONITOR.md). Plano futuro: [Odisseia](PLANO-ODISSEIA.md).
 
 ## Escrita no Hive
 
@@ -143,8 +148,8 @@ python3 tools/hive_workspace.py catalog
 | `CLAUDE.md`, `AGENTS.md` | Regras para agentes. |
 | `.claude/skills/hive-mind/` | Workflow Hive no Claude. |
 | `.codex/mcp-instructions.md` | Workflow Hive no Codex. |
-| `portfolio.md` | Catálogo/EV; contém IDs, não conteúdo canônico do alvo. |
+| `portfolio.md` | Referência histórica de EV; seleção de programas vem do Hive/instância. |
 | `tools/hive_scope_cache.py` | Materializa vereditos do Hive para o hook. |
-| `tools/hive_workspace.py` | Catálogo writer, criação de nota e fallback de ingestão. |
+| `tools/hive_workspace.py` | Metadados da instância, catálogo writer, ficha/nota e ingestão pelo mesmo launcher. |
 | `tools/seal_gate.py` | Exige scratch, brain e handoff Hive no fechamento. |
 | `targets/_TEMPLATE/` | Estrutura de scratch, sem autoridade. |

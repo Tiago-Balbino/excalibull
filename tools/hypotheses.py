@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hypotheses.py — motor de hipóteses do Excalibull (automatiza o `code 6`).
+"""hypotheses.py — motor de hipóteses do Excalibull (automatiza o `protocolo inventar/descobrir a roda`).
 
 Varre um CORPUS de recon (endpoints, JS, params, headers, notas) contra os sinais
 `S-*`/`C-*` de `memory/signals.md` e emite leads `[UNTESTED]` rankeados, prontos
@@ -24,6 +24,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from hive_workspace import _program, resolve_data_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SIGNALS = PROJECT_ROOT / "memory" / "signals.md"
@@ -177,17 +178,23 @@ def render_text(leads: list[dict], label: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Motor de hipóteses (code 6) do Excalibull")
+    ap = argparse.ArgumentParser(description="Motor de hipóteses (protocolo inventar/descobrir a roda) do Excalibull")
     ap.add_argument("corpus", nargs="?", default="",
                     help="arquivo/dir de recon, ou '-' p/ stdin")
     ap.add_argument("--corpus", dest="corpus_opt", default="",
                     help="idem posicional (arquivo/dir/'-')")
-    ap.add_argument("--program", default="", help="program_id p/ ler o corpus do Hive")
+    ap.add_argument("--program", type=_program, default="", help="program_id p/ ler o corpus writer da instância Hive")
     ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
     ap.add_argument("--signals", default=str(DEFAULT_SIGNALS))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     a.corpus = a.corpus_opt or a.corpus
+    if a.program:
+        try:
+            a.data_dir = str(resolve_data_dir(a.data_dir or None))
+        except ValueError as exc:
+            print(f"ERRO: {exc}", file=sys.stderr)
+            return 2
 
     try:
         sig_text = Path(a.signals).read_text(encoding="utf-8")

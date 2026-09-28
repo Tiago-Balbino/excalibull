@@ -71,10 +71,14 @@ class HiveScopeCacheTests(unittest.TestCase):
 class HiveWorkspaceTests(unittest.TestCase):
     def test_note_has_required_hive_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config"
+            config.mkdir()
+            (config / "hive.toml").write_text(f'HIVE_DATA_DIR = {json.dumps(tmp)}\nHIVE_ROLE = "writer"\n')
             body = Path(tmp) / "body.md"
             body.write_text("# Handoff\n\n## Status\ndiscarded — sem impacto.\n")
             args = argparse.Namespace(
                 data_dir=tmp,
+                instance=tmp,
                 team="team-a",
                 handle="alice",
                 input=str(body),

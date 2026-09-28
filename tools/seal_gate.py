@@ -56,7 +56,7 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
     problems: list[str] = []
     tdir = TARGETS_DIR / target
     if not tdir.is_dir():
-        return False, [f"targets/{target}/ não existe (crie o scratch com `code 3 {target}`)."]
+        return False, [f"targets/{target}/ não existe (prepare o scratch da sessão hunter; casa nova cria a ficha no Hive)."]
 
     # 1) log de sessão datado + próximo passo
     log = tdir / "a-cacada-ate-aqui.md"
@@ -85,7 +85,7 @@ def check_seal(target: str) -> tuple[bool, list[str]]:
     try:
         hive_data_dir = resolve_data_dir()
     except ValueError:
-        problems.append("HIVE_DATA_DIR ausente — nao e possivel provar que o handoff foi escrito no Hive.")
+        problems.append("Instância Hive indisponível/divergente — não é possível verificar o handoff.")
     else:
         program_dir = hive_data_dir / "programs" / target
         candidates: list[Path] = []

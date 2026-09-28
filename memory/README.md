@@ -9,7 +9,7 @@ alimente ao aprender uma técnica realmente generalizável.
 - `patterns.md` — **o coração**: os 8 padrões meta (P1–P8), ligados às 6 perguntas do [[THE-MIND]].
 - `arsenal.md` — **o *como testar*** por classe (sinais · confirmação · escalada · bypasses · FP · fontes).
 - `signals.md` — **o *quando dispara***: índice de gatilhos (sinal → pattern → hipótese → probe 🟢/🔴 → FP)
-  que o `code 6` varre contra o recon.
+  usado pelo motor de hipóteses para relacionar mecanismos ao contexto coletado.
 - `<classe>.md` — write-ups distilados por classe (crie conforme caçar; ex.: `broken-access-control.md`).
 - `sources.md` — feeds/repositórios pra continuar minerando.
 - `hive-first-source-of-truth.md` — decisão arquitetural e invariantes.
@@ -37,6 +37,18 @@ alimente ao aprender uma técnica realmente generalizável.
    original** — resuma + linke (força o aprendizado, respeita direito autoral).
 2. Mecânica transversal e nova → também em `patterns.md`.
 3. Técnica acionável nova → `arsenal.md` (com fonte) **e** um `S-*`/`C-*` em `signals.md` (a
-   disciplina de sincronia que mantém o `code 6` completo).
+   disciplina de sincronia do banco de sinais).
+
+## Dojo com a estrutura atual
+
+Usar o alvo e o contexto escolhidos no modo dojo conforme CODES.md. Hunter fica suspenso durante o estudo; o dojo não executa testes diretos no alvo.
+
+Acrescentar à destilação os campos **pré-condições, relação causal, contraexemplos, confirmação e fonte**. Enriquecer entradas existentes quando o mecanismo já estiver representado. Manter propostas incompletas como candidatas no arquivo da classe; elas não entram automaticamente em signals.md.
+
+Para promover um sinal, conferir sua condição observável e a interpretação da fonte, incluindo um exemplo positivo, um negativo semelhante e um incompleto. Preservar o formato atual consumido por hypotheses.py. Esse helper reconhece regex e IDs de sinais, mas não verifica todas as condições em prosa; seus resultados são candidatos a revisar, e não prova de aplicabilidade ou vulnerabilidade.
+
+Registrar os exercícios e seus limites em dojo-log.md e as fontes em _ingested.md, criados quando uma sessão real precisar deles. Somente conhecimento transversal entra neste banco; fatos, evidências e hipóteses específicos do programa são publicados no Hive.
+
+O projeto futuro de fichas estruturadas, avaliações e recuperação seletiva está em [PLANO-DOJO.md](../PLANO-DOJO.md). Ele ainda não foi implementado.
 
 > Curadoria > volume. Uma entrada bem distilada vale mais que dez links soltos.

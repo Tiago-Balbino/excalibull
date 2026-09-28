@@ -63,7 +63,7 @@ class RateLimiter:
 
 def http_get(url: str, timeout: float = 15, limiter: "RateLimiter | None" = None,
              headers: dict | None = None, retries: int = 2, backoff: float = 0.5,
-             ua: str = DEFAULT_UA) -> tuple[str, int]:
+             ua: str = DEFAULT_UA, authorize=None) -> tuple[str, int]:
     """GET stdlib com descompressão gzip + retry/backoff em erro transitório.
 
     Retorna (texto, status). status <= 0 indica erro de rede após os retries;
@@ -72,17 +72,30 @@ def http_get(url: str, timeout: float = 15, limiter: "RateLimiter | None" = None
     h = {"User-Agent": ua, "Accept-Encoding": "gzip"}
     if headers:
         h.update(headers)
+    opener = None
+    if authorize:
+        class CheckedRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if limiter:
+                    limiter.wait()
+                authorize(newurl)
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+        opener = urllib.request.build_opener(CheckedRedirect())
     attempt = 0
     while True:
         if limiter:
             limiter.wait()
         try:
+            if authorize:
+                authorize(url)
             req = urllib.request.Request(url, headers=h)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with (opener.open(req, timeout=timeout) if opener else urllib.request.urlopen(req, timeout=timeout)) as r:
                 raw = r.read()
                 if r.headers.get("Content-Encoding") == "gzip":
                     raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
                 return raw.decode("utf-8", "replace"), r.status
+        except PermissionError:
+            raise
         except urllib.error.HTTPError as e:
             if e.code in _RETRY_CODES and attempt < retries:
                 attempt += 1

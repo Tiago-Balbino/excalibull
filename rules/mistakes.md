@@ -1,13 +1,13 @@
 # Mistakes — registro "não repita"
 
 Lições de engajamentos reais. Cada uma nasceu de uma sessão onde se perdeu tempo, inflou
-report, ou perdeu bug. **Target-agnóstico.** Leia no início de todo hunt e no `contra-prova`.
+report, ou perdeu bug. **Target-agnóstico.** Leia no início de todo hunt e no `contra prova`.
 
 ## Top 10 (leia primeiro)
 
 1. **Escreva artefatos no disco.** Output no terminal não é evidência. Se não está no disco, não existe.
 2. **Nunca alucine paths.** `ls` todo path antes de citar em report/mensagem. Faltando → "pendente", nunca invente.
-3. **Rode a triagem ANTES de escrever o report.** As perguntas do `contra-prova` matam achado fraco em 30s; report leva 30 min.
+3. **Rode a triagem ANTES de escrever o report.** As perguntas do `contra prova` matam achado fraco em 30s; report leva 30 min.
 4. **Use browser real pra bug de WAF/JS/CAPTCHA/UI.** 403 de CDN em curl não é "não vulnerável" — é "você nunca chegou no app".
 5. **Demonstre impacto com dado real, não linguagem teórica.** "Poderia resultar em..." = isca de N/A. "Eis o dado que acessei" = achado.
 6. **Regra do irmão: teste todo endpoint/método/campo/alias adjacente.** 30%+ dos IDOR/BAC pagos são bugs de irmão.

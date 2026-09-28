@@ -16,7 +16,7 @@ O host precisa de recibo do Hive (o scope_hook do Bash valida na chamada).
 Uso:
   python3 tools/jsrecon.py https://developer.world.org [--max-js 40] [--scope world.org,worldcoin.org]
 """
-import argparse, gzip, io, json, os, re, sys, urllib.request, urllib.error
+import argparse, gzip, hashlib, io, json, os, re, sys, urllib.request, urllib.error
 from urllib.parse import urljoin, urlparse
 
 _TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +24,9 @@ if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 from extract import mask, in_scope, PATTERNS_TEXT, DEFAULT_UA  # noqa: E402
 from netcommon import RateLimiter, http_get  # noqa: E402
+from browser_recon import authorized
+from hive_workspace import _program
+from recon_records import request_record, safe_path
 
 UA = DEFAULT_UA
 
@@ -31,10 +34,23 @@ UA = DEFAULT_UA
 # por --rate no main(). Alvos manual-only (ex.: NBA --rate 3) EXIGEM throttle:
 # o BFS de bundles senão vira scanner automatizado.
 _LIMITER = RateLimiter(0.0)
+_PROGRAM = None
+_BLOCKED = set()
+
+
+def require_authorized(url):
+    if not authorized(url, _PROGRAM):
+        parsed = urlparse(url)
+        _BLOCKED.add(f"{parsed.hostname}{safe_path(parsed.path)}")
+        raise PermissionError("sem recibo vigente para o programa/URL")
 
 def fetch(url, timeout=15):
     # Delega ao GET compartilhado (gzip + retry/backoff + throttle).
-    return http_get(url, timeout=timeout, limiter=_LIMITER)
+    try:
+        return http_get(url, timeout=timeout, limiter=_LIMITER,
+                        authorize=require_authorized if _PROGRAM else None)
+    except PermissionError:
+        return "", -2
 
 # ---- regexes de extração ----
 RE_SCRIPT   = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
@@ -68,8 +84,10 @@ RE_SECRET   = PATTERNS_TEXT.secret
 RE_GKEY     = PATTERNS_TEXT.gkey
 
 def main():
+    global _PROGRAM
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
+    ap.add_argument("--program", type=_program, help="verifica recibos Hive em cada URL e redirect")
     ap.add_argument("--max-js", type=int, default=40)
     ap.add_argument("--scope", default="", help="csv de domínios base p/ marcar in-scope")
     ap.add_argument("--timeout", type=float, default=15)
@@ -81,11 +99,18 @@ def main():
                     help="máx req/s (throttle antes de cada fetch). 0 = sem limite. "
                          "Alvos manual-only exigem (ex.: NBA --rate 3).")
     a = ap.parse_args()
+    if a.max_js < 0:
+        ap.error("--max-js deve ser >= 0")
+    _PROGRAM = a.program
+    _BLOCKED.clear()
     _LIMITER.set_rate(a.rate)
     scopes = [s.strip() for s in a.scope.split(",") if s.strip()]
     base = f"{urlparse(a.url).scheme}://{urlparse(a.url).netloc}"
 
     html, st = fetch(a.url, a.timeout)
+    if st <= 0 or st >= 400:
+        print("Falha na página inicial; coleta indisponível.", file=sys.stderr)
+        return 2
     print(f"[*] {a.url} -> {st} ({len(html)} bytes html)", file=sys.stderr)
     js_urls = set()
     for m in RE_SCRIPT.finditer(html):
@@ -103,13 +128,15 @@ def main():
     queue = list(js_urls)
     seen = set()
     origin = urlparse(a.url).netloc
+    failed = []
     while queue and len(seen) < a.max_js:
         ju = queue.pop(0)
         if ju in seen:
             continue
         seen.add(ju)
         body, jst = fetch(ju, a.timeout)
-        if not body:
+        if not body or jst <= 0 or jst >= 400:
+            failed.append(ju)
             continue
         corpus[ju] = body
         if a.save:
@@ -179,6 +206,15 @@ def main():
             "source_maps": sorted(real_maps),
             "fingerprints": fingerprints,
             "secrets_masked": sorted(secrets),
+            "records": [request_record(urljoin(a.url, p), source="jsrecon") for p in api_paths],
+            "coverage": {"bundles_attempted": len(seen), "bundles_collected": len(corpus)-1,
+                         "bundles_pending": len(set(queue) - seen), "bundle_limit": a.max_js,
+                         "bundle_failures": len(failed), "blocked_urls": sorted(_BLOCKED),
+                         "source_maps_pending": max(0, len(smaps)-20),
+                         "status": "partial" if set(queue)-seen or failed or _BLOCKED or len(smaps)>20 else "collected",
+                         "interpretation": "collected representa somente a superfície estática observada"},
+            "content_hashes": {f"{urlparse(u).netloc}{safe_path(urlparse(u).path)}#{hashlib.sha256(urlparse(u).path.encode()).hexdigest()[:16]}": hashlib.sha256(body.encode()).hexdigest()
+                               for u, body in sorted(corpus.items())},
         }, ensure_ascii=False, indent=2))
         return
 

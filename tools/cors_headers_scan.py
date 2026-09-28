@@ -18,7 +18,30 @@ import concurrent.futures
 import json
 import sys
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from netcommon import RateLimiter
+from browser_recon import authorized
+
+_PROGRAM = None
+_LIMITER = RateLimiter(1)
+
+
+def checked_get(session, target, **kwargs):
+    from hive_scope_cache import require_authorized
+    for _ in range(6):
+        _LIMITER.wait()
+        if _PROGRAM:
+            if not authorized(target, _PROGRAM):
+                raise PermissionError("sem recibo vigente do programa")
+        else:
+            require_authorized([target], tool_name="cors_headers_scan.py")
+        response = session.get(target, allow_redirects=False, **kwargs)
+        if response.status_code not in {301, 302, 303, 307, 308} or not response.headers.get("Location"):
+            return response
+        target = urljoin(target, response.headers["Location"])
+        if urlparse(target).username or urlparse(target).password:
+            raise PermissionError("redirect com credenciais na URL")
+    raise requests.RequestException("limite de redirects")
 
 try:
     import requests
@@ -103,9 +126,10 @@ def test_cors(session, target, timeout, verify):
     findings = []
     for label, origin in cors_probes(target):
         try:
-            r = session.get(target, headers={"Origin": origin}, timeout=timeout,
-                            verify=verify, allow_redirects=True)
-        except requests.RequestException:
+            r = checked_get(session, target, headers={"Origin": origin}, timeout=timeout, verify=verify)
+        except (requests.RequestException, PermissionError):
+            findings.append({"sev": "INFO", "check": f"cors-incomplete:{label}",
+                             "msg": "Probe não concluído; não interpretar como CORS seguro.", "incomplete": True})
             continue
         acao = r.headers.get("Access-Control-Allow-Origin", "")
         acac = r.headers.get("Access-Control-Allow-Credentials", "").lower()
@@ -141,14 +165,16 @@ def scan(target, timeout, verify):
     session = requests.Session()
     session.headers.update({"User-Agent": "Sword-Scanner/1.0 (+bug-bounty-recon)"})
     try:
-        r = session.get(target, timeout=timeout, verify=verify, allow_redirects=True)
-    except requests.RequestException as e:
+        r = checked_get(session, target, timeout=timeout, verify=verify)
+    except (requests.RequestException, PermissionError) as e:
         result["error"] = str(e)
         return result
     result["ok"] = True
     result["status"] = r.status_code
     result["final_url"] = r.url
     result["findings"] = audit_headers(r.headers) + test_cors(session, target, timeout, verify)
+    result["complete"] = not any(f.get("incomplete") for f in result["findings"])
+    result["interpretation"] = "sinais de configuração; impacto/exfiltração exigem contra prova"
     return result
 
 # ---------- saída ----------
@@ -179,6 +205,7 @@ def summary(results):
           f"({len(results)} alvo(s))")
 
 def main():
+    global _PROGRAM
     ap = argparse.ArgumentParser(description="Sword — CORS & Security Headers Scanner")
     ap.add_argument("targets", nargs="*", help="URLs/hosts a testar")
     ap.add_argument("-f", "--file", help="arquivo com uma URL por linha")
@@ -186,7 +213,13 @@ def main():
     ap.add_argument("-w", "--workers", type=int, default=8, help="alvos em paralelo")
     ap.add_argument("--json", help="salvar relatório JSON neste caminho")
     ap.add_argument("--insecure", action="store_true", help="ignorar erros de certificado TLS")
+    ap.add_argument("--program", help="program_id explícito para verificar cada URL/redirect")
+    ap.add_argument("--rate", type=float, default=1, help="máximo de requests/s compartilhado")
     args = ap.parse_args()
+    if args.rate <= 0:
+        ap.error("rate >0")
+    _PROGRAM = args.program
+    _LIMITER.set_rate(args.rate)
 
     targets = list(args.targets)
     if args.file:
@@ -203,7 +236,8 @@ def main():
     if _tools_dir not in sys.path:
         sys.path.insert(0, _tools_dir)
     from hive_scope_cache import require_authorized
-    require_authorized(targets, tool_name="cors_headers_scan.py")
+    if not _PROGRAM:
+        require_authorized(targets, tool_name="cors_headers_scan.py")
 
     verify = not args.insecure
     results = []
@@ -221,6 +255,7 @@ def main():
         with open(args.json, "w") as fh:
             json.dump(report, fh, indent=2, ensure_ascii=False)
         print(f"\n{C.G}Relatório salvo em {args.json}{C.X}")
+    return 0 if all(r.get("ok") and r.get("complete") for r in results) else 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

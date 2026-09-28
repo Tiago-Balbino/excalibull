@@ -1,7 +1,7 @@
 # Chain Table — capacidade → próximo bug
 
-Referência do §12 (chain-search obrigatório), do `code 6`, do `protocolo armar a arapuca` e
-do `descobrir a roda`. Chains profundas pagam o máximo.
+Referência do §12 (chain-search obrigatório), do `protocolo inventar/descobrir a roda`,
+do `protocolo armar a arapuca` e do `protocolo escada de jacó`.
 
 ## O algoritmo de chain-walk
 

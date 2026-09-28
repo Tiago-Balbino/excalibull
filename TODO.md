@@ -43,10 +43,10 @@ pentest-agents ficaram de fora por escopo. Ordem por valor pro fluxo:
 
 - [ ] **MCP `bounty-platforms`** — sync de escopo/policy/hacktivity + draft/submit via API
   (HackerOne/Bugcrowd/Intigriti/YesWeHack). Fonte: `pentest-agents/mcp-bounty-server/`.
-  Roda via `uv` — adaptar pra `python3` ou instalar `uv`. Casaria com `code 10 learn` e o
+  Roda via `uv` — adaptar pra `python3` ou instalar `uv`. Casaria com `code 12 learn` e o
   `protocolo report`.
 - [ ] **MCP `writeup-search`** — busca (FAISS/SQLite) sobre corpus próprio de write-ups;
-  alimentaria `modo dojo` e `code 6`. Fonte: `pentest-agents/mcp-writeup-server/` + `rag-builder/`.
+  alimentaria `modo dojo` e `protocolo inventar/descobrir a roda`. Fonte: `pentest-agents/mcp-writeup-server/` + `rag-builder/`.
 - [ ] **Browser stealth (camofox)** — bypass de Cloudflare/Akamai/DataDome. Hoje só citado em
   `rules/techniques.md`; falta `tools/camofox_ctl.sh` + doc. Fonte: `pentest-agents/tools/camofox_ctl.sh`.
 - [ ] **Suite SAST** — auditoria white-box de código-fonte (útil p/ alvos open-source como

@@ -2,7 +2,7 @@
 
 **O que é:** ranking dos programas que você considera caçar, com a intel pra escolher.
 Porta de entrada do `modo hunter`.
-**Alimentado por:** `modo sábado à tarde` (garimpa e rankeia programas aqui).
+**Referência histórica de valor esperado.** Catálogo operacional vem do Hive/instância; atualizações manuais não substituem o conhecimento canônico.
 **Como o `modo hunter` usa:** lê apenas o catálogo/ranking, escolhe um `program_id` e
 consulta esse programa no Hive. Este arquivo não duplica scope, recon ou findings.
 

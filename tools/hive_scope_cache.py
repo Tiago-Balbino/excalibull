@@ -346,10 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "record-scope":
         if not 0 < args.ttl_hours <= 24:
             parser.error("--ttl-hours deve estar entre 0 e 24")
-        data_dir = args.data_dir or os.environ.get("HIVE_DATA_DIR")
-        if not data_dir:
-            parser.error("passe --data-dir ou defina HIVE_DATA_DIR (ex.: .../hive_instance/data)")
         try:
+            from hive_instance import resolve_data_dir
+            data_dir = str(resolve_data_dir(args.data_dir))
             recs = record_scope(args.program, data_dir, args.revision, args.ttl_hours)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"ERRO: {exc}", file=sys.stderr)

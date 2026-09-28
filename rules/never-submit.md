@@ -1,6 +1,6 @@
 # Never-Submit — lista de kill + achados condicionalmente válidos
 
-Referência do `protocolo contra-prova`. Resumo sempre-ativo no [[THE-MIND]] §11.
+Referência do `protocolo contra prova`. Resumo sempre-ativo no [[THE-MIND]] §11.
 
 ## Lista de kill instantâneo (sem chain, não reporta)
 

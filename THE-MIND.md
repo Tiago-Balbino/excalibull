@@ -55,7 +55,7 @@ pentest-agents está anotada pra rastreio.
   (query/path/body/header; GET/POST/PUT/PATCH/DELETE; raw/url/duplo/unicode/stacked;
   parser-diff). Operacionalizado por `tools/exhaustion.py` (matriz por lead) + o
   `giveup_guard` (estrito): não dá pra `brain.py record ... exhausted` sem a matriz do lead
-  ≥80% coberta OU fechada como FP (contra-prova). *(pa: Rule 24)*
+  ≥80% coberta OU fechada como FP (contra prova). *(pa: Rule 24)*
 - **§6 — Teste diferencial > resposta única.** Compare pares/trios, não respostas soltas:
   auth vs unauth, 2 papéis, 2 parsers/content-types, antes vs depois de mutar estado. O
   delta (latência, cache-key, campo, side-effect) é o sinal. *(pa: Rule 25)*
@@ -95,33 +95,36 @@ alta. A coluna **rules/** diz o que carregar junto.
 | Situação | Comando | Carregar de rules/ |
 |---|---|---|
 | Operar **sem disparar flag** (stealth) / alvo novo / escopo dúbio | `postura escudo` | — |
-| Escolher **qual programa** caçar | catálogo/`portfolio.md` → `program_id` explícito → `modo hunter` | — |
+| Escolher **qual programa** caçar | catálogo Hive/instância → `program_id` explícito → `modo hunter` | — |
 | Consultar contexto de programa/asset | `code 7 find <program> [asset]` (Hive ao vivo) | — |
 | Publicar o estado da sessão | `code 7 send <program>` (ingest + idle + read-back) | — |
 | Ver catálogo e fila | `code 7` | — |
 | Ver o que já foi testado/exausto | `code 8 <program>` (Hive + WAL local) | — |
 | Visão geral | `code 9` (sync Hive + brain local) | — |
 | Achei um candidato — já reportaram isso? | `code 5` (dupcheck) | `never-submit` |
-| Vigiar mudanças/features novas num alvo | `protocolo monitor` (ligável) | `vendor-fingerprints` |
-| Registrar desfecho de uma submissão | `code 10` (learn) | — |
+| Registrar uso do Hive, tokens e tempo até achado | `protocolo monitor` (ligável) | — |
+| Registrar desfecho de uma submissão | `code 12` (learn) | — |
 | Pontuar um rascunho antes de submeter | `code 11` (quality) | `mistakes`, `never-submit` |
-| Alvo novo, no PC | `protocolo casa-nova` ou `code 3` | `identities` |
-| Mapear superfície | `code 0` (completo) / `code 1` (passivo) | — |
-| Recon chegou, quero **hipóteses** | `code 6 <alvo>` | `chain-table` |
+| Alvo novo, no PC | `protocolo casa nova` (code 3 auxiliar) | `identities` |
+| Mapear superfície | `achar o x` (passivo) / `saquear o navio` (ativo) | — |
+| Observar tráfego autenticado, preservar requests e revisitar ativos conhecidos | `protocolo pérola negra` | — |
+| Caminhos esgotados, quero inferir outro rumo | `inventar/descobrir a roda <program>` | `chain-table` |
 | Recon chegou, hora de caçar | `modo hunter` | `mistakes`, `techniques`, `waf-bypass`, `vendor-fingerprints` |
-| Achei um candidato a bug | `protocolo contra-prova` | `never-submit`, `mistakes` |
-| Passou como ACHADO | `protocolo escada de jacó` → `protocolo report` | `chain-table`, `identities` |
+| Achei um candidato a bug | `protocolo contra prova` | `never-submit`, `mistakes` |
+| Achado confirmado: ver nível/recompensa e tentar subir | `protocolo escada de jacó` → `protocolo report` | `chain-table`, `identities` |
 | WAF barrando payload | `modo hunter` + escada | `waf-bypass`, `payloads` |
-| Mudança de rumo/estratégia | `code 4` (registra aqui no log) | — |
+| Mudança de rumo/estratégia | `code 10` (registra aqui no log) | — |
 | Achei um sinal e quero ramificar | `seguir o rastro` | `techniques` |
 | Juntando achados fracos que talvez chainem | `protocolo armar a arapuca` | `chain-table` |
-| A caçada empacou / arapuca cheia | `protocolo descobrir a roda` | `chain-table` |
 | Caçar por camadas de acesso | nível 0 recon · nível 1 `One Piece` · nível 2 cross-account | — |
-| Comparar o mesmo fluxo entre navegadores | `formação tridente` | — |
-| Estudar/aprender (distilar write-ups) | `modo dojo` | — |
+| Comparar o mesmo fluxo entre navegadores | `protocolo formação de tridente` | — |
+| Estudar/aprender a partir do alvo atual (distilar write-ups e alimentar sinais) | `modo dojo` (suspende hunter; preserva contexto) | — |
 | Ser guiado passo a passo | `modo bicicleta` | — |
-| Montar/curar o portfólio | `modo sábado à tarde` | — |
 | Encerrar o `modo hunter` | dispara o **Selo de saída** (§5 abaixo) | — |
+
+**Modos e posturas:** hunter é persistente; ao ativar hunter/bicicleta, perguntar a postura (escudo ou lança) antes de seguir pelo cérebro. Posturas ajustam o modo sem sobrescrevê-lo. Escudo demonstra e lança testa diretamente sob autorização. Formação de tridente é protocolo de comparação entre browsers e segue a postura vigente. Protocolos disponibilizados não se ligam todos automaticamente.
+
+**Hunter/bicicleta e dojo são exclusivos.** Entrar no dojo durante uma caçada suspende hunter e os testes diretos, preservando alvo, contexto, próximo passo e publicação pendente. O dojo usa o cérebro para estudar mecanismos, exercitar reconhecimento e alimentar sinais; lê contexto do Hive e formula hipóteses sem testar diretamente o alvo. Ao voltar ao hunter, perguntar a postura. Trocar de modo não encerra a sessão nem substitui o Selo e a confirmação de publicação. Fluxo atual em CODES.md; arquitetura futura em [PLANO-DOJO.md](PLANO-DOJO.md).
 
 ## §3.1 — Os 4 pontos de desistência (e por que atravessar)
 
@@ -155,10 +158,10 @@ relevantes por situação (ver PARTE 3). Índice detalhado em `rules/README.md`.
 
 | Arquivo | O que é | Quando carregar |
 |---|---|---|
-| `rules/never-submit.md` | Lista de kill instantâneo + "conditionally valid / chain required" | Toda triagem (`contra-prova`) |
-| `rules/chain-table.md` | Capability → próximo bug + âncoras-feeder por classe | Todo PASS (§12), `code 6`, arapuca |
-| `rules/identities.md` | Env-vars de identidade por plataforma + regras de uso | `report`, `casa-nova`, qualquer signup |
-| `rules/mistakes.md` | Erros recorrentes por categoria (do-not-repeat) | Início de todo hunt + `contra-prova` |
+| `rules/never-submit.md` | Lista de kill instantâneo + "conditionally valid / chain required" | Toda triagem (`contra prova`) |
+| `rules/chain-table.md` | Capability → próximo bug + âncoras-feeder por classe | Todo PASS (§12), `inventar/descobrir a roda`, arapuca |
+| `rules/identities.md` | Env-vars de identidade por plataforma + regras de uso | `report`, `casa nova`, qualquer signup |
+| `rules/mistakes.md` | Erros recorrentes por categoria (do-not-repeat) | Início de todo hunt + `contra prova` |
 | `rules/techniques.md` | Provas concretas (GraphQL authz, DRF 401/404, PKCE, source maps, clairvoyance) | Ao caçar a classe correspondente |
 | `rules/waf-bypass.md` | Escada de bypass de WAF (7 níveis) | WAF barrando payload |
 | `rules/vendor-fingerprints.md` | Patched / cooldowns / fingerprints de framework | Recon + antes de testar CVE conhecida |
@@ -180,7 +183,7 @@ log local para o loop da sessão, mas esse WAL não é fonte canônica e deve se
 - `targets/` — **scratch efêmero** para ferramentas, bruto e drafts; nunca autoriza.
 
 **Regra permanente — recon SEMPRE fecha no Hive:** ao concluir QUALQUER protocolo de recon
-(`achar o x`, `ladrão de bancos`, `code 0`/`code 1`, baseline/diff do `monitor`), os achados —
+(`achar o x`, `saquear o navio`, `pérola negra`, métricas do `monitor`), os achados —
 superfície, hosts/endpoints, hipóteses `[UNTESTED]` **e negativos** — vão para o `hive_mind` ANTES
 de encerrar o protocolo: nota focada com `asset_refs` → `ingest_workspace` → fila `idle` → read-back.
 Sem publicação confirmada, o recon **não está "feito"**. WAL (`brain/`) e `targets/` não contam como
@@ -190,7 +193,7 @@ persistência. (Recon passivo como `achar o x` publica **sem** recibo; só o tr�
 informação que for **usada** num teste ou que **case o critério de encadeamento/escalada** (enabler,
 sub-crítico composável, escalador, primitiva) vai **também** para a **arapuca** do alvo no Hive —
 **mesmo que já esteja no recon**. Recon = tudo encontrado; arapuca = só o que encadeia/escala. A
-duplicação é intencional e serve pra gerar hipóteses de escalada depois (`code 6`).
+duplicação é intencional e serve pra gerar hipóteses de escalada depois (protocolo inventar/descobrir a roda).
 
 **Comandos do brain (detalhe em [[CODES]]):**
 ```
@@ -206,7 +209,7 @@ Status válidos: `active confirmed exhausted potential recon chain waf-bypass wa
 duplicate policy browser-rejected da-killed`.
 
 **O que gravar e quando (no loop do hunter):**
-- Todo veredito de lead → `record` (o status casa o vocabulário do `contra-prova`).
+- Todo veredito de lead → `record` (o status casa o vocabulário do `contra prova`).
 - Todo endpoint tocado → `endpoint`.
 - Toda capacidade ganha num chain (§12) → `capability --from-capability`.
 - Todo beco-sem-saída de chain → `record ... chain "dead-end: ..."`.
@@ -252,4 +255,36 @@ Cada decisão: **Data · Decisão · Por quê · Status**. Não apagar — regis
 - **Status:** aplicado em cérebro, comandos, docs, templates, hooks e Selo.
 
 ---
-_Nova decisão de rumo: `code 4` acrescenta um bloco aqui (Data · Decisão · Por quê · Status)._
+### 2026-09-28 — Revisão de codes, protocolos, modos e posturas
+
+- **Decisão:** retirar codes -1/0/1/2/6; transferir recon ativo/CORS ao saquear
+  o navio, passivo ao achar o x e hipóteses à roda. Code 3 auxilia casa nova;
+  decisões usam code 10 e Learn usa code 12. Demais codes mantidos.
+- **Modos:** hunter é persistente; bicicleta tem os mesmos métodos com orientação
+  explicativa; dojo é exclusivo dos modos de caçada, reusa alvo/contexto e
+  alimenta sinais. Modo sábado à tarde removido. Posturas são escudo e lança.
+- **Protocolos:** casa nova recebe três dados iniciais e conteúdo, cria ficha
+  no Hive sem aprovar escopo; contra prova começa por duplicidade e entrega
+  publicabilidade, estimativa conforme o programa e clareza da reprodução;
+  report gera versões PT/EN. Ladrão de bancos removido em favor de saquear.
+  Pérola negra reúne tráfego observado, estrutura das requests e revisitas.
+  One Piece tenta todos os casos aplicáveis com uma conta; seguir o rastro
+  expande sinais com apoio da matriz de exaustão; arapuca mantida.
+- **Decisões finais:** inventar/descobrir a roda são gatilhos equivalentes;
+  escada de jacó mostra nível, faixa/estimativa, próximos degraus e tenta subir
+  com evidências. Formação de tridente é protocolo entre navegadores, seguindo
+  a postura vigente; essa classificação substitui a decisão anterior de postura.
+- **Instância e números:** destinos e launcher de ingestão vêm da mesma
+  hive_instance configurada. Monitor registra sessão/contextos, chamadas/tempos
+  do Hive, usage real informado e tempo até achado; ausência não vira zero.
+- **Por quê:** orientar o trabalho por fluxos exibidos e conhecimento canônico
+  no Hive, preservando o modo e a distinção entre hipóteses e resultados reais.
+- **Status:** aplicado em contratos, roteador, ferramentas e documentação.
+  Planos de arquitetura futura do dojo e lacunas do recon preservados em
+  PLANO-DOJO.md e PLANO-ODISSEIA.md. Validação usa dados temporários e mocks;
+  integração CDP com navegador real permanece sem execução nesta revisão.
+  Suíte completa: 110 testes passaram; ajuste final de contagem de cache
+  verificado com os 8 testes de integração da revisão. Arquivo temporário
+  REVISAO-EXCALIBULL.md removido após implementar todas as decisões.
+
+_Nova decisão de rumo: `code 10` acrescenta um bloco aqui (Data · Decisão · Por quê · Status)._

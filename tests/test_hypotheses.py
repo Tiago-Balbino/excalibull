@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Testes do motor de hipóteses (tools/hypotheses.py, o `code 6`)."""
+"""Testes do motor de hipóteses (tools/hypotheses.py, o `protocolo inventar/descobrir a roda`)."""
 
 from __future__ import annotations
 

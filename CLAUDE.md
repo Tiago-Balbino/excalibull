@@ -12,7 +12,7 @@ Para qualquer alvo: skill Hive → `THE-MIND.md` → `CODES.md` → `rules/` e
 
 - O Hive Mind é canônico para scope, policy, recon, ativos, endpoints,
   hipóteses, resultados descartados, evidências e findings.
-- `portfolio.md` é somente catálogo/EV e fornece `program_id`; não duplica intel.
+- `portfolio.md` é referência histórica/EV; escolher `program_id` pelo Hive/instância.
 - `brain/` é WAL local para rapidez durante a sessão.
 - `targets/<program_id>/` é scratch efêmero exigido por algumas ferramentas.
 - Nenhum arquivo local autoriza tráfego. Não restaure o antigo board
@@ -34,7 +34,7 @@ Para qualquer alvo: skill Hive → `THE-MIND.md` → `CODES.md` → `rules/` e
 
 Registre positivos e negativos em notas focadas, com `asset_refs`, equipe e
 handle. Nunca grave credenciais, cookies, tokens, chaves ou PII. Em writer,
-grave sob `$HIVE_DATA_DIR/programs/<program_id>/` com
+resolva `HIVE_INSTANCE_DIR/config/hive.toml` e grave sob seu `HIVE_DATA_DIR/programs/<program_id>/` com
 `tools/hive_workspace.py note`, chame `ingest_workspace`, aguarde
 `get_sync_status=idle` e confirme por read-back. Em reader, prepare o handoff e
 entregue a um writer; não declare a sessão fechada antes da publicação.

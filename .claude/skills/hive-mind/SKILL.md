@@ -21,8 +21,8 @@ endpoint, finding ou estado de caçada.
 
 ## Fluxo obrigatório
 
-1. Escolha um `program_id` do catálogo (`portfolio.md` ou, em writer,
-   `python3 tools/hive_workspace.py catalog`). Não existe busca semântica global:
+1. Escolha um `program_id` do catálogo (Hive/instância; `python3 tools/hive_workspace.py catalog`
+   enumera somente pastas locais e não prova completude remota). Não existe busca semântica global:
    `hive_search` sempre exige um programa.
 2. Consulte `hive_search` por objetivo, ativo e resultados descartados antes de
    formular novas hipóteses.
@@ -31,7 +31,8 @@ endpoint, finding ou estado de caçada.
    `python3 tools/hive_scope_cache.py record <contexto.json>` para o hook Bash.
 4. Use `targets/<program_id>/` e `brain/` somente como scratch/WAL da sessão.
 5. Registre resultados positivos e negativos em notas focadas. Em writer, use
-   `tools/hive_workspace.py note`; em reader, prepare o handoff para o writer.
+   `tools/hive_workspace.py note`, resolvendo destino pela instância em
+   `HIVE_INSTANCE_DIR/config/hive.toml`; escrita e ingestão usam a mesma instância. Em reader, prepare o handoff para o writer.
 6. Execute `ingest_workspace`, espere `get_sync_status` ficar `idle` e confirme
    por read-back (`hive_search`/`hive_get_context`) antes de encerrar.
 

@@ -255,6 +255,13 @@ def main():
     ap.add_argument("--json", action="store_true",
                     help="emite resultado estruturado em JSON (consumido pelo saquear.py)")
     a = ap.parse_args()
+    if a.diff_program:
+        from hive_workspace import _program, resolve_data_dir
+        try:
+            a.diff_program = _program(a.diff_program)
+            a.data_dir = str(resolve_data_dir(a.data_dir or None))
+        except ValueError as exc:
+            ap.error(str(exc))
 
     # Monta as tarefas (domínio × fonte) e roda em paralelo — antes era sequencial
     # (~9 fontes × N domínios), o maior gargalo do passive.
