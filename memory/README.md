@@ -49,6 +49,6 @@ Para promover um sinal, conferir sua condição observável e a interpretação 
 
 Registrar os exercícios e seus limites em dojo-log.md e as fontes em _ingested.md, criados quando uma sessão real precisar deles. Somente conhecimento transversal entra neste banco; fatos, evidências e hipóteses específicos do programa são publicados no Hive.
 
-O projeto futuro de fichas estruturadas, avaliações e recuperação seletiva está em [PLANO-DOJO.md](../PLANO-DOJO.md). Ele ainda não foi implementado.
+O projeto futuro de fichas estruturadas, avaliações e recuperação seletiva está em [PLANO-DOJO.md](../../HIVE/hive_atlas/PLANO-DOJO.md). Ele ainda não foi implementado.
 
 > Curadoria > volume. Uma entrada bem distilada vale mais que dez links soltos.

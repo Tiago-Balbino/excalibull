@@ -21,19 +21,25 @@ from browser_recon import authorized, observe_cdp, read_har
 from endpoints import load_existing
 from file_safety import atomic_write_text, locked_file
 from hive_workspace import _program, resolve_data_dir
+from hive_documents import identity
+from hive_outbox import Outbox, prepare
 from recon_records import normalize_record, safe_path
 from recon_snapshot import compare, load_snapshot, save_snapshot, surface
 from session_monitor import tool_metric
 
 ROOT = Path(__file__).resolve().parent
 _PROGRAM = None
+_SESSION = None
 
 
 def run_tool(args, timeout=300):
     started = time.monotonic()
+    env = os.environ.copy()
+    if _SESSION:
+        env["EXCALIBULL_SESSION_ID"] = _SESSION
     try:
         result = subprocess.run([sys.executable, str(ROOT / args[0]), *args[1:]],
-                                capture_output=True, text=True, timeout=timeout)
+                                capture_output=True, text=True, timeout=timeout, env=env)
         # Não imprimir stderr com URLs ou conteúdo bruto de ferramentas.
         tool_metric(args[0], time.monotonic() - started, result.returncode == 0, _PROGRAM)
         return result.returncode, result.stdout
@@ -69,23 +75,21 @@ def select_urls(explicit, hosts, known, revisit):
     return result
 
 
-def write_coverage(path, program, report):
+def write_coverage(path, program, report, *, session=None):
     hosts = sorted({item["host"] for item in report["revisits"]})
-    text = (f"---\nprogram_id: {program}\ndocument_type: note\nclassification: internal\n"
-            "source: excalibull\ntags: [excalibull, perola-negra, recon-coverage]\n"
-            f"asset_refs: {json.dumps(hosts)}\n---\n# Pérola negra — cobertura da execução\n\n"
+    text = ("# Pérola negra — cobertura da execução\n\n"
             "Cobertura observada, não veredito de vulnerabilidade. Revisar antes de ingerir.\n\n```json\n")
-    from datetime import datetime, timezone
-    text = text.replace("source: excalibull\n", f"source: excalibull\ncollected_at: {datetime.now(timezone.utc).isoformat()}\n")
-    atomic_write_text(path, text + json.dumps(report, ensure_ascii=False, indent=2) + "\n```\n")
+    return prepare(program, "perola-negra-coverage", text + json.dumps(report, ensure_ascii=False, indent=2) + "\n```\n",
+                   data_dir=path, session=session, assets=hosts, tags=["perola-negra", "recon-coverage"])
 
 
 def main():
-    global _PROGRAM
+    global _PROGRAM, _SESSION
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("program", type=_program)
-    ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
+    ap.add_argument("--data-dir", default=os.environ.get("EXCALIBULL_OUTBOX_DIR", ""))
     ap.add_argument("--scratch")
+    ap.add_argument("--session")
     ap.add_argument("--url", action="append", default=[], help="página de entrada autorizada; repetível")
     ap.add_argument("--hosts", default="", help="CSV de hosts explícitos")
     ap.add_argument("--revisit-known", action="store_true")
@@ -99,7 +103,9 @@ def main():
     ap.add_argument("--rate", type=float, default=1.0, help="req/s da coleta estática; respeitar policy do Hive")
     a = ap.parse_args()
     _PROGRAM = a.program
-    a.data_dir = str(resolve_data_dir(a.data_dir or None, writer=True))
+    a.data_dir = str(resolve_data_dir(a.data_dir or None))
+    identity()
+    _SESSION = Outbox(a.data_dir).session(a.program, a.session, create=True)
     if a.max_hosts < 1 or a.max_js < 0 or a.rate <= 0 or not 0 < a.seconds <= 3600:
         ap.error("limites inválidos: max-hosts >=1, max-js >=0, rate >0, seconds 0..3600")
     if not (a.url or a.hosts or a.revisit_known or a.har or a.cdp):
@@ -107,12 +113,13 @@ def main():
     scratch = Path(a.scratch or tempfile.mkdtemp(prefix="perola_negra_"))
     scratch.mkdir(parents=True, exist_ok=True)
     notes = Path(a.data_dir).expanduser() / "programs" / a.program / "notes"
-    snapshot_path = notes / "excalibull-perola-negra-snapshot.md"
+    projection = Path(a.data_dir) / "projections" / a.program
+    snapshot_path = projection / "excalibull-perola-negra-snapshot.md"
     baseline = load_snapshot(snapshot_path)
-    urls = select_urls(a.url, a.hosts, known_urls(notes, baseline) if a.revisit_known else [], a.revisit_known)
+    urls = select_urls(a.url, a.hosts, known_urls(projection, baseline) if a.revisit_known else [], a.revisit_known)
     report = {"program_id": a.program, "protocol": "perola-negra", "revisits": [],
               "browser": [], "deferred_urls": len(urls[a.max_hosts:]),
-              "publication": "pending-ingest-idle-readback"}
+              "publication": "pending-writer"}
     records, updates = [], {}
     for path in a.har:
         imported, coverage = read_har(path, a.role, a.flow)
@@ -159,7 +166,7 @@ def main():
     atomic_write_text(records_path, json.dumps({"program_id": a.program, "records": records}, ensure_ascii=False, indent=2) + "\n")
     if records:
         rc, _ = run_tool(["endpoints.py", "merge", a.program, "--input", str(records_path),
-                          "--source", "perola-negra", "--data-dir", a.data_dir])
+                          "--source", "perola-negra", "--data-dir", a.data_dir, "--session", _SESSION])
         if rc:
             raise ValueError("merge do corpus falhou; snapshot não será avançado")
     if updates:
@@ -167,15 +174,15 @@ def main():
             latest = load_snapshot(snapshot_path)
             for host, pages in updates.items():
                 latest.setdefault(host, {}).update(pages)
-            save_snapshot(snapshot_path, a.program, latest)
+            save_snapshot(snapshot_path, a.program, latest, data_dir=a.data_dir, contribute_hosts=updates, session=_SESSION)
     report["record_count"] = len(records)
     report["status"] = "partial" if (report["deferred_urls"] or
         any(v["status"] in {"failed", "blocked-without-receipt"} or v.get("coverage", {}).get("status") != "collected"
             for v in report["revisits"]) or any(b.get("invalid") or b.get("filtered_without_receipt") or b.get("network_failures") or b.get("requests_pending") for b in report["browser"])) else "collected"
     atomic_write_text(scratch / "perola-negra-coverage.json", json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    write_coverage(notes / "excalibull-perola-negra-coverage.md", a.program, report)
+    write_coverage(Path(a.data_dir), a.program, report, session=_SESSION)
     print(f"Pérola negra: {len(records)} registros; {len(report['revisits'])} revisitas; cobertura {report['status']}.")
-    print(f"Writer: {notes}\nScratch sanitizado: {scratch}\nPublicação pendente: ingestão → idle → read-back.")
+    print(f"Contribuições locais: {notes}\nScratch sanitizado: {scratch}\nPublicação pendente: entregar a writer → ingestão → read-back.")
     return 1 if report["status"] == "partial" else 0
 
 

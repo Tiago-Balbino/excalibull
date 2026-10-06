@@ -22,12 +22,18 @@ limites do crawl; scanners externos não são ligados automaticamente. Cada URL,
 bundle e redirect acessado exige recibo vigente do mesmo programa. Respeitar
 também constraints/headers e limites específicos informados pelo Hive.
 
-Sem `--data-dir`, o writer é resolvido pela instância; `--instance` seleciona
-outra raiz configurada. O helper conserva registros no corpus, artefatos em
-scratch e uma nota de cobertura no writer. Falhas, bloqueios e limites permanecem
-explícitos; terminar a ferramenta não confirma cobertura total nem publicação.
-O agente revisa/sintetiza os resultados, ingere, aguarda idle e faz read-back.
-Tráfego autenticado e revisitas com diff seguem pelo pérola negra abaixo.
+Sem `--data-dir`, usa `.hive/outbox/` ou `EXCALIBULL_OUTBOX_DIR`.
+Os arquivos permanecem pendentes de entrega a writer; consultar o contexto
+do Hive não publica arquivos. Informe `HIVE_HANDLE`/`HIVE_TEAM_TAG` e selecione a
+sessão com `hive_outbox.py start/status`. Os coletores usam o gerador compartilhado,
+IDs por sessão/autor/assunto e revisões imutáveis. O corpus de endpoints e o snapshot
+de comparação são projeções em `outbox/projections/<program>/`; contribuições por
+host ficam em `outbox/programs/<program>/notes/`. Projeções não entram na exportação.
+
+Para publicar o conjunto esperado, use `hive_outbox.py deliver/ingest/verify` com
+workspace/configuração de writer explícitos. O Selo padrão exige a sessão confirmada;
+`--handoff-only` preserva publicação pendente. Consultar o contexto
+remoto pelo MCP oficial antes de emitir tráfego.
 
 ## Pérola negra
 
@@ -39,15 +45,13 @@ ativos conhecidos comparando a superfície observada. Ferramenta:
 ## Preparação
 
 O agente consulta o Hive pelo `program_id`, recon anterior, descartes e regras.
-`--data-dir`/`HIVE_DATA_DIR` aponta para o diretório de dados configurado na
-`hive_instance`, por exemplo `/home/nice000160/projetos/pessoal/hive_instance/data`.
-O protocolo não seleciona instância por fichas locais.
-`HIVE_INSTANCE_DIR` seleciona a raiz; por padrão usa a instância irmã
-`../hive_instance`. Sem `--data-dir`, resolve `HIVE_DATA_DIR` do TOML; overrides
-divergentes são recusados. Escrita é permitida somente no papel writer.
+`--data-dir`/`EXCALIBULL_OUTBOX_DIR` seleciona o staging local de contribuições,
+com padrão `.hive/outbox/`. A preparação funciona sem papel writer, configuração
+de servidor, Qdrant, Ollama ou túnel no computador. Esses arquivos são pendentes
+e não substituem a consulta ao Hive remoto pelo cliente oficial `hive mind`.
 Metadados: `python3 tools/hive_workspace.py workspace`.
 
-Antes da coleta estática: `hive_get_context` no ativo exato e registrar a resposta
+Antes da coleta estática: `hive_get_context` no ativo exato (URL concreta com `url_prefix` para requests) e registrar a resposta
 com `tools/hive_scope_cache.py record resposta.json`. O programa do recibo deve
 coincidir com o selecionado. O coletor verifica cada URL, inclusive bundles,
 mapas e redirects. Hosts descobertos não recebem autorização automática.
@@ -68,7 +72,7 @@ não reproduz requests nem copia o HAR para o writer.
 ```sh
 python3 tools/perola_negra.py meu-programa \
   --har /tmp/privado/fluxo.har --role member --flow checkout \
-  --data-dir /caminho/hive_instance/data --scratch /tmp/perola-negra
+  --data-dir /caminho/excalibull-outbox --scratch /tmp/perola-negra
 ```
 
 Executar novamente com outro HAR/papel para comparar contextos. Usar aliases
@@ -97,7 +101,7 @@ já aberto.
 ```sh
 /tmp/excalibull-browser-venv/bin/python tools/perola_negra.py meu-programa \
   --cdp http://127.0.0.1:9222 --seconds 120 --role member --flow checkout \
-  --data-dir /caminho/hive_instance/data --scratch /tmp/perola-negra
+  --data-dir /caminho/excalibull-outbox --scratch /tmp/perola-negra
 ```
 
 O observador registra requests e status HTTP durante a janela escolhida. Não
@@ -115,13 +119,13 @@ Referências: [eventos de rede](https://playwright.dev/python/docs/network) e
 ```sh
 python3 tools/perola_negra.py meu-programa \
   --hosts app.exemplo.com --revisit-known --max-hosts 10 --max-js 40 --rate 1 \
-  --data-dir /caminho/hive_instance/data --scratch /tmp/perola-negra
+  --data-dir /caminho/excalibull-outbox --scratch /tmp/perola-negra
 ```
 
 `--hosts` seleciona raízes explícitas. `--url` é repetível e permite páginas de
 entrada específicas. `--revisit-known` acrescenta páginas do snapshot anterior
-e raízes de hosts do corpus de endpoints no writer. Consultar o Hive ao vivo
-antes: o writer pode estar incompleto/desatualizado. Passar `--url` explicitamente
+e raízes de hosts do corpus de endpoints no staging local. Consultar o Hive ao vivo
+antes: o staging pode estar incompleto/desatualizado. Passar `--url` explicitamente
 se a query for importante; seus valores não ficam no baseline. Rotas sanitizadas
 com `{redacted}` não são reproduzidas.
 
@@ -156,7 +160,7 @@ Método desconhecido permanece para preservar contexto. Corpus corrompido ou
 programa incompatível falham sem sobrescrever o estado anterior.
 
 Scratch: `perola-negra-records.json` e `perola-negra-coverage.json`.
-Writer `programs/<program_id>/notes/`:
+Outbox local `programs/<program_id>/notes/`:
 
 - Corpus de endpoints (`document_type: endpoint`).
 - `excalibull-perola-negra-snapshot.md`: baseline completo.
@@ -164,7 +168,7 @@ Writer `programs/<program_id>/notes/`:
 
 O agente revisa conteúdo/PII, publica positivos e negativos, ingere, aguarda
 `idle` e confirma read-back. O utilitário retorna
-`publication: pending-ingest-idle-readback`; escrita no writer não encerra o
+`publication: pending-ingest-idle-readback`; escrita no staging local não encerra o
 protocolo. Falhas/parciais não são negativos de segurança.
 
 CDP requer Playwright. Sua integração foi verificada com eventos simulados;

@@ -92,7 +92,7 @@ def parse_signals(text: str) -> list[dict]:
 
 
 def load_corpus(args) -> str:
-    """Monta o texto do corpus a partir de stdin / arquivo / dir / Hive."""
+    """Monta o texto do corpus a partir de stdin / arquivo / dir / staging."""
     parts: list[str] = []
     if args.corpus == "-":
         parts.append(sys.stdin.read())
@@ -183,8 +183,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="arquivo/dir de recon, ou '-' p/ stdin")
     ap.add_argument("--corpus", dest="corpus_opt", default="",
                     help="idem posicional (arquivo/dir/'-')")
-    ap.add_argument("--program", type=_program, default="", help="program_id p/ ler o corpus writer da instância Hive")
-    ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
+    ap.add_argument("--program", type=_program, default="", help="program_id p/ ler corpus local preparado (cobertura parcial)")
+    ap.add_argument("--data-dir", default=os.environ.get("EXCALIBULL_OUTBOX_DIR", ""))
     ap.add_argument("--signals", default=str(DEFAULT_SIGNALS))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)

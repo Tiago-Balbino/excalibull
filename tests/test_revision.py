@@ -10,57 +10,73 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import active_recon
 import cors_headers_scan
-import hive_instance
+import hive_paths
 import hive_workspace
 import saquear
 import session_monitor
 
 
 @pytest.fixture
-def writer(tmp_path, monkeypatch):
-    root = tmp_path / "hive"
+def staging(tmp_path, monkeypatch):
     data = tmp_path / "data"
-    (root / "config").mkdir(parents=True)
-    (root / "bin").mkdir()
-    (root / "config/hive.toml").write_text(f'HIVE_DATA_DIR = {json.dumps(str(data))}\nHIVE_ROLE = "writer"\nSECRET = "NEVER-EXPORT"\n')
-    (root / "bin/hive-teste").write_text("launcher")
-    monkeypatch.setenv("HIVE_INSTANCE_DIR", str(root))
+    monkeypatch.setenv("EXCALIBULL_OUTBOX_DIR", str(data))
     monkeypatch.setenv("EXCALIBULL_BRAIN_DIR", str(tmp_path / "brain"))
-    monkeypatch.delenv("HIVE_DATA_DIR", raising=False)
-    monkeypatch.delenv("HIVE_BIN", raising=False)
-    return root, data
+    monkeypatch.setenv("HIVE_HANDLE", "alice")
+    monkeypatch.setenv("HIVE_TEAM_TAG", "team-a")
+    return tmp_path, data
 
 
-def test_workspace_exports_only_metadata_and_rejects_divergence(writer, tmp_path):
-    root, data = writer
-    info = hive_instance.workspace()
+def test_workspace_exports_local_paths_without_server_config(staging, tmp_path):
+    root, data = staging
+    info = hive_paths.workspace()
     assert info["data_dir"] == str(data)
-    assert info["instance_root"] == str(root)
-    assert "NEVER-EXPORT" not in json.dumps(info)
+    assert info["mode"] == "remote"
+    assert info["publication"] == "pending-writer"
+    assert info["mcp_command"] == ["hive", "mind"]
     assert "SECRET" not in info
-    with pytest.raises(ValueError, match="diverge"):
-        hive_instance.workspace(str(tmp_path / "different"), writer=True)
-    (root / "config/hive.toml").write_text(f'HIVE_DATA_DIR = {json.dumps(str(data))}\nHIVE_ROLE = "reader"\n')
-    assert hive_instance.workspace()["role"] == "reader"
-    with pytest.raises(ValueError, match="reader"):
-        hive_instance.workspace(writer=True)
+    assert hive_paths.resolve_data_dir(tmp_path / "different") == tmp_path / "different"
 
 
-def test_ingest_uses_same_instance_launcher_and_blocks_wrong_binary(writer, monkeypatch):
-    root, data = writer
+def test_catalog_uses_official_mcp_and_preserves_pagination(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(hive_workspace.subprocess, "run", lambda cmd, **kwargs: calls.append((cmd, kwargs)) or SimpleNamespace(returncode=0))
-    args = argparse.Namespace(data_dir=None, instance=None, hive_bin=None)
-    assert hive_workspace.cmd_ingest(args) == 0
-    assert calls == [([str(root / "bin/hive-teste"), "ingest"], {"cwd": str(root), "check": False})]
-    args.hive_bin = "/different/hive"
-    with pytest.raises(ValueError, match="diverge"):
-        hive_workspace.cmd_ingest(args)
-    assert len(calls) == 1
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def catalog(self, **args):
+            calls.append(args)
+            return {"targets": [], "next_offset": 10, "truncated": True, "warnings": ["partial"]}
+    monkeypatch.setattr(hive_workspace, "HiveClient", Client)
+    assert hive_workspace.main(["catalog", "--offset", "5", "--limit", "5", "--json"]) == 0
+    assert calls == [{"offset": 5, "limit": 5, "order": "balanced"}]
+    result = json.loads(capsys.readouterr().out)
+    assert result["next_offset"] == 10 and result["truncated"]
 
 
-def test_casa_nova_normalizes_id_and_never_overwrites_or_approves_scope(writer, tmp_path, capsys):
-    root, data = writer
+def test_export_preserves_pending_state_and_never_overwrites(staging, tmp_path, capsys):
+    import hashlib
+    import tarfile
+    data = staging[1]
+    note = data / "programs/example/notes/alice-handoff.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Resultado negativo\nNenhum impacto demonstrado.\n")
+    output = tmp_path / "contribution.tar.gz"
+    argv = ["export", "example", "--output", str(output), "--legacy-files"]
+    assert hive_workspace.main(argv) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["publication"] == "pending-writer"
+    with tarfile.open(output) as package:
+        manifest = json.load(package.extractfile("manifest.json"))
+        assert manifest["files"][0]["sha256"] == hashlib.sha256(note.read_bytes()).hexdigest()
+        assert package.extractfile("programs/example/notes/alice-handoff.md").read() == note.read_bytes()
+    original = output.read_bytes()
+    assert hive_workspace.main(argv) == 2
+    assert output.read_bytes() == original
+
+
+def test_casa_nova_normalizes_id_and_never_overwrites_or_approves_scope(staging, tmp_path, capsys):
+    root, data = staging
     body = tmp_path / "body.md"
     body.write_text("Fonte: informações fornecidas pelo operador.\nAtivo observado: app.example.\n")
     argv = ["create-program", "--name", "Alvo Ágil", "--platform", "hackerone", "--handle", "alice", "--input", str(body)]
@@ -114,7 +130,7 @@ def test_cors_checks_redirect_and_marks_unexecuted_probes(monkeypatch):
     assert all(r["check"].startswith("cors-incomplete") for r in results)
 
 
-def test_monitor_no_guessed_tokens_deduplicates_usage_and_marks_time(writer, tmp_path, capsys):
+def test_monitor_no_guessed_tokens_deduplicates_usage_and_marks_time(staging, tmp_path, capsys):
     assert session_monitor.main(["start", "example", "--mode", "hunter", "--posture", "lanca"]) == 0
     path, state = session_monitor.load_active()
     assert session_monitor.totals(state)["tokens"] is None
@@ -145,11 +161,11 @@ def test_monitor_no_guessed_tokens_deduplicates_usage_and_marks_time(writer, tmp
         session_monitor.usage({"input_tokens": -1, "output_tokens": 20})
     assert session_monitor.main(["stop"]) == 0
     assert session_monitor.load_active() == (None, None)
-    note = next(writer[1].glob("programs/example/notes/*monitor*.md"))
-    assert "pending-ingest-idle-readback" in note.read_text()
+    note = next(staging[1].glob("programs/example/notes/*monitor*.md"))
+    assert "pending-writer" in note.read_text()
 
 
-def test_monitor_missing_cache_is_unknown_and_keeps_observed_counts(writer):
+def test_monitor_missing_cache_is_unknown_and_keeps_observed_counts(staging):
     session_monitor.main(["start", "example"])
     session_monitor.record("usage", "model", values={"input_tokens": 100, "output_tokens": 20}, event_id="interval-1")
     _, state = session_monitor.load_active()
@@ -163,7 +179,7 @@ def test_monitor_missing_cache_is_unknown_and_keeps_observed_counts(writer):
     assert tokens["cached_input_samples"] == 1
 
 
-def test_saquear_preserves_partial_results_and_does_not_probe_discovered_hosts(writer, tmp_path, monkeypatch):
+def test_saquear_preserves_partial_results_and_does_not_probe_discovered_hosts(staging, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(saquear, "authorized", lambda url, program: True)
     def fake_run(cmd, timeout=300):

@@ -21,25 +21,32 @@ endpoint, finding ou estado de caçada.
 
 ## Fluxo obrigatório
 
-1. Escolha um `program_id` do catálogo (Hive/instância; `python3 tools/hive_workspace.py catalog`
-   enumera somente pastas locais e não prova completude remota). Não existe busca semântica global:
-   `hive_search` sempre exige um programa.
+1. Escolha um `program_id`/projeto do catálogo remoto (`hive_list_targets` ou
+   `python3 tools/hive_workspace.py catalog`); use `next_offset` para paginar e
+   preserve avisos de cobertura parcial. `hive_search` exige um programa.
 2. Consulte `hive_search` por objetivo, ativo e resultados descartados antes de
    formular novas hipóteses.
-3. Antes de qualquer request, consulte `hive_get_context` para o host exato.
+3. Antes de qualquer request, consulte `hive_get_context` para o ativo exato; requests HTTP exigem `url_prefix` com a URL concreta.
    Materialize a resposta estruturada com
    `python3 tools/hive_scope_cache.py record <contexto.json>` para o hook Bash.
 4. Use `targets/<program_id>/` e `brain/` somente como scratch/WAL da sessão.
-5. Registre resultados positivos e negativos em notas focadas. Em writer, use
-   `tools/hive_workspace.py note`, resolvendo destino pela instância em
-   `HIVE_INSTANCE_DIR/config/hive.toml`; escrita e ingestão usam a mesma instância. Em reader, prepare o handoff para o writer.
-6. Execute `ingest_workspace`, espere `get_sync_status` ficar `idle` e confirme
-   por read-back (`hive_search`/`hive_get_context`) antes de encerrar.
+5. Registre positivos e negativos em notas focadas com `tools/hive_workspace.py note`.
+   Selecione uma sessão via `hive_outbox.py start/status`; use autoria explícita.
+   A outbox local é definida por `EXCALIBULL_OUTBOX_DIR`, padrão `.hive/outbox/`.
+   Exporte com `tools/hive_workspace.py export` e entregue a writer; exportação
+   mantém `pending-writer` e não confirma publicação.
+6. O writer ingere; confira relatório por arquivo, `get_sync_status=idle` e
+   read-back (`hive_search`/`hive_get_context`). O MCP remoto atual não anuncia
+   `ingest_workspace` nem oferece upload. `unknown` não significa fila vazia.
+   Com workspace de writer acessível, `hive_outbox.py deliver/ingest/verify` registra
+   tentativas e prova por contribuição. O Selo padrão exige o conjunto esperado e
+   scratch/WAL vinculados ao handoff. `--handoff-only` mantém PUBLICAÇÃO PENDENTE.
+   Read-back confirma trechos identificados; não comprova hash integral remoto.
 
 ## Formato de escrita
 
 As notas vivem em `programs/<program_id>/notes/` ou `evidence/` e precisam de:
 `program_id`, `document_type`, `classification`, `source`, `collected_at`, tags
 de equipe/handle e `asset_refs`. O utilitário `hive_workspace.py note` produz
-esse front matter. `scope.json` e `rules.md` só mudam por pedido explícito do
+esse front matter. Para registro de projeto, informe `platform` e `target_name` juntos. `scope.json` e `rules.md` só mudam por pedido explícito do
 operador; aprovação de escopo é ação administrativa local, nunca MCP.

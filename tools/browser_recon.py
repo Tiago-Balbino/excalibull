@@ -21,7 +21,7 @@ from recon_records import request_record
 
 
 def authorized(url, program):
-    receipt = authorization_for(url)
+    receipt = authorization_for(url, program_id=program)
     return bool(receipt and receipt.get("program_id") == program
                 and receipt.get("confirmed") is True and receipt.get("status") == "authorized"
                 and receipt.get("action_allowed") is True)

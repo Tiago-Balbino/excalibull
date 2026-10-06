@@ -1,129 +1,78 @@
 #!/usr/bin/env python3
+"""Selo por sessão: manifesto esperado, handoff, ingestão e read-back.
+
+O padrão exige publicação confirmada. --handoff-only permite encerrar a
+execução local com publicação pendente explícita, preservando WAL/outbox.
 """
-seal_gate.py — Gate verificável do "Selo de saída" do modo hunter (Excalibull).
-
-O Selo fecha apenas quando o estado local foi convertido em handoff no
-workspace canonico do Hive Mind:
-
-  1. targets/<slug>/a-cacada-ate-aqui.md — scratch com bloco datado de HOJE
-     e uma linha "Próximo passo".
-  2. brain/targets/<slug>.md          — write-ahead log local com registros.
-  3. $HIVE_DATA_DIR/programs/<slug>/{notes,evidence}/ contém um handoff
-     Excalibull de HOJE. Ingestão e read-back ainda devem ser confirmados via MCP.
-
-Uso:
-    python3 tools/seal_gate.py <slug>
-
-Exit 0 = Selo pode fechar. Exit 1 = falta item (lista o que falta). Exit 2 = alvo inexistente.
-"""
-
 from __future__ import annotations
 
-import sys
-from datetime import datetime, timezone
+import argparse
+import hashlib
 from pathlib import Path
+import sys
 
-_TOOLS = Path(__file__).resolve().parent
-if str(_TOOLS) not in sys.path:
-    sys.path.insert(0, str(_TOOLS))
+from brain import get_brain_dir
+from hive_documents import identifier
+from hive_outbox import Outbox
+from hive_publication import publication_problems
 
-from brain import get_brain_dir, slugify  # noqa: E402
-from hive_workspace import resolve_data_dir  # noqa: E402
-
-PROJECT_ROOT = _TOOLS.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TARGETS_DIR = PROJECT_ROOT / "targets"
 
 
-def _today_candidates() -> list[str]:
-    """Datas 'de hoje' aceitas: local E UTC (distintas).
-
-    hive_workspace.py carimba o handoff em UTC; o operador pode estar num fuso
-    atrás/à frente. Perto da meia-noite as duas datas divergem — aceitar ambas
-    evita reprovar o selo por diferença de fuso.
-    """
-    local = datetime.now().strftime("%Y-%m-%d")
-    utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return [local] if local == utc else [local, utc]
-
-
-def _today() -> str:
-    """Rótulo humano de 'hoje' (local) para mensagens."""
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def check_seal(target: str) -> tuple[bool, list[str]]:
-    """Retorna (ok, problemas). ok=True se o Selo pode fechar."""
-    problems: list[str] = []
-    tdir = TARGETS_DIR / target
-    if not tdir.is_dir():
-        return False, [f"targets/{target}/ não existe (prepare o scratch da sessão hunter; casa nova cria a ficha no Hive)."]
-
-    # 1) log de sessão datado + próximo passo
-    log = tdir / "a-cacada-ate-aqui.md"
-    if not log.exists():
-        problems.append(
-            f"targets/{target}/a-cacada-ate-aqui.md ausente — adicione um bloco datado da sessão."
-        )
-    else:
-        ltxt = log.read_text(encoding="utf-8", errors="ignore")
-        if not any(day in ltxt for day in _today_candidates()):
-            problems.append(
-                f"a-cacada-ate-aqui.md sem bloco de hoje ({_today()}) — registre o que rodou nesta sessão."
-            )
-        low = ltxt.lower()
-        if "próximo passo" not in low and "proximo passo" not in low:
-            problems.append("a-cacada-ate-aqui.md sem linha 'Próximo passo:' — diga onde retomar.")
-
-    # 2) brain com registros do alvo
-    brain_file = get_brain_dir() / "targets" / f"{slugify(target)}.md"
-    if not brain_file.exists():
-        problems.append(
-            f"brain sem registros para '{target}' — rode `brain.py record`/`endpoint` nos leads da sessão."
-        )
-
-    # 3) handoff no workspace canonico do Hive
+def check_seal(target, *, session=None, data_dir=None, publication=True):
+    problems = []
+    identifier(target)
+    scratch = TARGETS_DIR / target / "a-cacada-ate-aqui.md"
+    wal = get_brain_dir() / "targets" / f"{target}.md"
+    if not scratch.is_file():
+        problems.append("scratch da sessão ausente: a-cacada-ate-aqui.md")
+    elif not any(label in scratch.read_text().lower() for label in ("próximo passo", "proximo passo")):
+        problems.append("scratch sem linha 'Próximo passo'")
+    if not wal.is_file() or not wal.read_text().strip():
+        problems.append("WAL do programa ausente/vazio")
     try:
-        hive_data_dir = resolve_data_dir()
-    except ValueError:
-        problems.append("Instância Hive indisponível/divergente — não é possível verificar o handoff.")
+        queue = Outbox(data_dir)
+        session = queue.session(target, session)
+        state = queue.load(session, target)
+        entries = queue.current(state)
+        handoff = state.get("handoff") or {}
+        if not entries or handoff.get("id") not in state["expected"] or state["expected"].get(handoff.get("id")) != handoff.get("revision") or handoff.get("expected") != state["expected"]:
+            problems.append("handoff atual não vinculado à sessão; prepare note <program> handoff")
+        else:
+            for path, key in ((scratch, "scratch_sha256"), (wal, "wal_sha256")):
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != handoff.get(key):
+                    problems.append("scratch/WAL mudou após o handoff; prepare a revisão atual")
+        for entry in entries:
+            queue.bytes_for(state, entry)
+        if publication:
+            problems.extend(publication_problems(queue, state))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        problems.append(str(exc))
+    return not problems, problems
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("program", type=identifier)
+    parser.add_argument("--session")
+    parser.add_argument("--data-dir")
+    parser.add_argument("--handoff-only", action="store_true")
+    args = parser.parse_args(argv)
+    ok, problems = check_seal(args.program, session=args.session, data_dir=args.data_dir,
+                              publication=not args.handoff_only)
+    if not ok:
+        print(f"Selo incompleto para {args.program}:", file=sys.stderr)
+        for problem in problems:
+            print(f"- {problem}", file=sys.stderr)
+        return 1
+    if args.handoff_only:
+        print(f"Handoff local pronto para {args.program}; PUBLICAÇÃO PENDENTE. Preserve WAL/outbox.")
     else:
-        program_dir = hive_data_dir / "programs" / target
-        candidates: list[Path] = []
-        for folder in ("notes", "evidence"):
-            base = program_dir / folder
-            if base.is_dir():
-                for day in _today_candidates():
-                    candidates.extend(base.glob(f"*-excalibull-*-{day}.md"))
-        if not candidates:
-            problems.append(
-                "handoff Hive de hoje ausente — use `tools/hive_workspace.py note` e depois "
-                "`ingest_workspace` + `get_sync_status` + read-back."
-            )
-
-    return (len(problems) == 0), problems
-
-
-def main(argv: list[str]) -> int:
-    if not argv:
-        print("uso: python3 tools/seal_gate.py <slug>", file=sys.stderr)
-        return 2
-    target = argv[0]
-    if not (TARGETS_DIR / target).is_dir():
-        print(f"⚠  alvo '{target}' não está em targets/ — nada pra selar.", file=sys.stderr)
-        return 2
-
-    ok, problems = check_seal(target)
-    if ok:
-        print(f"✅ Selo local OK para '{target}': scratch + brain + handoff Hive presentes.")
-        print("   Confirme ingest_workspace, get_sync_status idle e read-back antes de declarar hunter OFF.")
-        return 0
-
-    print(f"🚫 Selo de saída INCOMPLETO para '{target}'. Falta:")
-    for p in problems:
-        print(f"   - {p}")
-    print("\nResolva os itens acima antes de confirmar 'modo hunter off'.")
-    return 1
+        print(f"Selo confirmado para {args.program}: contribuições esperadas ingeridas e recuperadas no Hive.")
+        print("Verificação por trechos identificados; o contrato atual não comprova o hash integral remoto.")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    raise SystemExit(main())

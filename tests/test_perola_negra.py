@@ -17,12 +17,10 @@ import recon_snapshot
 
 
 @pytest.fixture(autouse=True)
-def selected_instance(tmp_path, monkeypatch):
-    instance = tmp_path / "instance"
-    (instance / "config").mkdir(parents=True)
-    (instance / "config/hive.toml").write_text(f'HIVE_DATA_DIR = {json.dumps(str(tmp_path / "data"))}\nHIVE_ROLE = "writer"\n')
-    monkeypatch.setenv("HIVE_INSTANCE_DIR", str(instance))
-    monkeypatch.delenv("HIVE_DATA_DIR", raising=False)
+def selected_staging(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXCALIBULL_OUTBOX_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("HIVE_HANDLE", "alice")
+    monkeypatch.setenv("HIVE_TEAM_TAG", "team-a")
 
 
 def har(tmp_path):
@@ -82,7 +80,7 @@ def test_corpus_preserves_methods_roles_params_and_existing_status(tmp_path, mon
     args = ["merge", "example", "--input", str(path), "--data-dir", str(data)]
     assert invoke(endpoints, args, monkeypatch) == 0
     assert invoke(endpoints, args, monkeypatch) == 0
-    note = next(data.glob("programs/example/notes/*corpus.md"))
+    note = endpoints.projection_path(data, "example", "alice")
     corpus = endpoints.load_existing(note)
     get = corpus[("app.example", "GET", "/api/v1/items")]
     assert get["status"] == "tested"
@@ -94,7 +92,7 @@ def test_corpus_preserves_methods_roles_params_and_existing_status(tmp_path, mon
 
 def test_corrupt_corpus_and_wrong_program_do_not_overwrite(tmp_path, monkeypatch):
     data = tmp_path / "data"
-    note = data / "programs/example/notes/moldret-excalibull-endpoints-corpus.md"
+    note = endpoints.projection_path(data, "example", "alice")
     note.parent.mkdir(parents=True)
     note.write_text("preserve this invalid corpus")
     path = tmp_path / "input.json"
@@ -110,7 +108,7 @@ def test_corrupt_corpus_and_wrong_program_do_not_overwrite(tmp_path, monkeypatch
 
 def test_authorization_requires_current_program_and_flags(monkeypatch):
     receipt = {"program_id": "example", "confirmed": True, "status": "authorized", "action_allowed": True}
-    monkeypatch.setattr(browser_recon, "authorization_for", lambda url: receipt)
+    monkeypatch.setattr(browser_recon, "authorization_for", lambda url, **kwargs: receipt)
     assert browser_recon.authorized("https://app.example/path", "example")
     assert not browser_recon.authorized("https://app.example/path", "other")
     receipt["confirmed"] = False
@@ -191,7 +189,7 @@ def test_perola_har_offline_produces_writer_and_no_traffic(tmp_path, monkeypatch
             "--scratch", str(tmp_path / "scratch"), "--role", "member", "--flow", "profile"]
     assert invoke(perola_negra, args, monkeypatch) == 0
     report = json.loads((tmp_path / "scratch/perola-negra-coverage.json").read_text())
-    assert report["publication"] == "pending-ingest-idle-readback"
+    assert report["publication"] == "pending-writer"
     assert report["revisits"] == []
     assert report["record_count"] == 1
 
@@ -218,7 +216,7 @@ def test_revisit_diff_failure_and_partial_preserve_baseline(tmp_path, monkeypatc
     assert invoke(perola_negra, args, monkeypatch) == 0
     report = json.loads(report_path.read_text())
     assert report["revisits"][0]["added_endpoints"] == ["/api/bar"]
-    snapshot_path = data_dir / "programs/example/notes/excalibull-perola-negra-snapshot.md"
+    snapshot_path = data_dir / "projections/example/excalibull-perola-negra-snapshot.md"
     original = snapshot_path.read_text()
     payload["coverage"]["status"] = "partial"
     payload["records"] = []
@@ -230,6 +228,26 @@ def test_revisit_diff_failure_and_partial_preserve_baseline(tmp_path, monkeypatc
     monkeypatch.setattr(perola_negra, "authorized", lambda *args: False)
     assert invoke(perola_negra, args, monkeypatch) == 1
     assert json.loads(report_path.read_text())["revisits"][0]["status"] == "blocked-without-receipt"
+
+
+def test_collector_preserves_explicit_session_when_active_pointer_changes(tmp_path, monkeypatch):
+    from hive_outbox import Outbox
+    queue = Outbox(tmp_path / 'data')
+    queue.start('example', 'original-session')
+    monkeypatch.setattr(perola_negra, 'authorized', lambda *args: True)
+    real_run = perola_negra.run_tool
+    def run(argv, timeout=300):
+        if argv[0] == 'jsrecon.py':
+            queue.start('example', 'another-session')
+            return 0, json.dumps({'records':[recon_records.request_record('https://app.example/api/foo')],
+                                  'coverage':{'status':'collected'}})
+        return real_run(argv, timeout)
+    monkeypatch.setattr(perola_negra, 'run_tool', run)
+    assert invoke(perola_negra, ['example', '--hosts', 'app.example', '--session', 'original-session',
+                                '--data-dir', str(queue.root)], monkeypatch) == 0
+    original = queue.load('original-session')
+    assert len(original['expected']) == 3  # endpoints + snapshot + coverage
+    assert queue.load('another-session')['expected'] == {}
 
 
 def test_known_revisit_retains_entry_paths_and_explicit_selection(tmp_path):

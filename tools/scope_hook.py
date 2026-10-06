@@ -24,6 +24,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HOOK_DIR = Path(__file__).resolve().parent
 if str(HOOK_DIR) not in sys.path:
@@ -145,6 +146,13 @@ def extract_hosts(command: str) -> list[str]:
     return hosts
 
 
+def extract_targets(command: str) -> list[str]:
+    """Conserva origem e caminho para não perder exclusões por URL."""
+    urls = list(dict.fromkeys(re.findall(r"https?://[^\s\"'<>`]+", command, re.IGNORECASE)))
+    represented = {urlsplit(url).hostname for url in urls}
+    return urls + [host for host in extract_hosts(command) if host not in represented]
+
+
 def _is_loopback(host: str) -> bool:
     if host in {"localhost", "localhost.localdomain"}:
         return True
@@ -163,9 +171,9 @@ def _hosts_from_payload(payload: dict) -> list[str]:
     tool_input = payload.get("tool_input") or {}
     if tool == "WebFetch":
         url = tool_input.get("url", "") or ""
-        return extract_hosts(url)
+        return extract_targets(url)
     command = tool_input.get("command", "") or ""
-    return extract_hosts(command)
+    return extract_targets(command)
 
 
 def main() -> int:
@@ -198,7 +206,7 @@ def main() -> int:
         return 0
 
     for host in hosts:
-        if _is_loopback(host):
+        if _is_loopback(urlsplit(host if "://" in host else "//" + host).hostname or ""):
             continue
         try:
             receipt = authorization_for(host)

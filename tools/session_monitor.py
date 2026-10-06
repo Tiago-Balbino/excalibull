@@ -13,6 +13,8 @@ from pathlib import Path
 from brain import get_brain_dir
 from file_safety import atomic_write_text, locked_file
 from hive_workspace import _program, _slug, resolve_data_dir
+from hive_outbox import Outbox, prepare
+from hive_documents import identity
 
 
 def now():
@@ -119,19 +121,18 @@ def tool_metric(name, elapsed, success, program):
 
 
 def report(state, data_dir=None):
-    destination = resolve_data_dir(data_dir, writer=True)
+    destination = resolve_data_dir(data_dir or state.get("outbox_dir"))
+    if state.get("outbox_dir") and destination != Path(state["outbox_dir"]):
+        raise ValueError("monitor não pode exportar para outra outbox durante a sessão")
     metrics = {"session_id": state["session_id"], "program_id": state["program_id"],
                "started_at": state["started_at"], "ended_at": state.get("ended_at"),
                "status": state["status"], "current_context": state["context"],
                "totals": totals(state), "findings": state["findings"],
-               "events": state["events"], "publication": "pending-ingest-idle-readback"}
-    target = destination / "programs" / state["program_id"] / "notes" / f"excalibull-monitor-{state['session_id']}.md"
-    fm = (f"---\nprogram_id: {state['program_id']}\ndocument_type: note\nclassification: internal\n"
-          f"source: excalibull\ncollected_at: {now()}\ntags: [excalibull, session-metrics, monitor]\nasset_refs: []\n---\n")
+               "events": state["events"], "publication": "pending-writer"}
     text = "# Monitor — métricas da sessão\n\nTempo é duração de parede; tokens cobrem somente usage real registrado. "
     text += "Sem usage, tokens são indisponíveis. Não interpretar omissões como zero.\n\n```json\n"
-    atomic_write_text(target, fm + text + json.dumps(metrics, ensure_ascii=False, indent=2) + "\n```\n")
-    return target
+    return prepare(state["program_id"], "monitor", text + json.dumps(metrics, ensure_ascii=False, indent=2) + "\n```\n",
+                   data_dir=destination, session=state["session_id"], tags=["session-metrics", "monitor"])
 
 
 def main(argv=None):
@@ -142,6 +143,8 @@ def main(argv=None):
     start.add_argument("--mode", default="hunter")
     start.add_argument("--posture", default="unknown")
     start.add_argument("--protocol", default="monitor")
+    start.add_argument("--session")
+    start.add_argument("--data-dir")
     where = sub.add_parser("where")
     for key in ("mode", "posture", "protocol"):
         where.add_argument(f"--{key}")
@@ -172,9 +175,14 @@ def main(argv=None):
         if args.command == "start":
             if state:
                 raise ValueError("monitor já ativo; reutilize a sessão ou encerre antes de iniciar outra")
-            sid = uuid.uuid4().hex
+            identity()
+            queue = Outbox(args.data_dir)
+            sid = queue.session(args.program, args.session, create=True)
             path = folder() / f"{sid}.json"
+            if path.exists():
+                raise ValueError("métricas desta sessão já existem; preserve o WAL e selecione uma nova sessão")
             state = {"session_id": sid, "program_id": args.program, "status": "active", "started_at": now(),
+                     "outbox_dir": str(queue.root),
                      "context": {key: _slug(getattr(args, key)) for key in ("mode", "posture", "protocol")},
                      "events": [], "findings": []}
             atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2))
@@ -213,7 +221,7 @@ def main(argv=None):
                 atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2))
                 atomic_write_text(active_path(), json.dumps({"session_id": state["session_id"]}))
             print(target)
-            print("Publicação pendente: ingestão → idle → read-back.")
+            print("Publicação pendente: entregar a writer → ingestão → read-back.")
             return 0
         print(json.dumps({"session_id": state["session_id"], "program_id": state["program_id"],
                           "context": state["context"], "totals": totals(state), "findings": state["findings"]}, ensure_ascii=False, indent=2))

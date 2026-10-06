@@ -110,15 +110,15 @@ reconciliar.
 Levantado em 2026-09-22. Evolução do `backstage` acima: em vez de operar só em `targets/`
 no formato antigo, o **`modo backstorage`** sobe um **hive_mind LOCAL** (instância/mirror
 local do Hive) para o Excalibull funcionar com a **mesma interface MCP**
-(`hive_search`/`hive_get_context`/`ingest_workspace`) **sem depender do servidor remoto/túnel**
-(hoje `hive_instance/bin/hive-teste` fala com Qdrant remoto via `scripts/abrir-tunel.sh`,
-porta 16334 — ver `memory/hive-ingest-flow.md`). No fim, o **`protocolo fechar a porta`**
+(`hive_search`/`hive_get_context`) **sem depender do servidor remoto**.
+Revisar essa proposta frente ao cliente oficial `hive mind` e à outbox de
+contribuições; o fluxo atual está em `memory/hive-ingest-flow.md`. No fim, o **`protocolo fechar a porta`**
 sincroniza o local com o Hive canônico e **destrói o cérebro local**.
 
 Requisitos (do operador):
 - [ ] **`modo backstorage on/off`** (taxonomia: é *modo* = compõe protocolos + muda a postura).
   Ao ligar, sobe backend local (data dir local + vetor local: Qdrant embarcado/local ou
-  fallback + Ollama já é local) e aponta as ferramentas MCP pro local; banner de modo. Ao
+  fallback + embeddings de laboratório) e aponta as ferramentas MCP pro local; banner de modo. Ao
   desligar sem `fechar a porta`, mantém o local intacto (não sincroniza sozinho).
 - [ ] **Mesma interface** — enquanto ativo, `hive_search`/`hive_get_context`/`ingest_workspace`
   batem no backend local, sem tunnel/`atlasgrid.site`. Escrita no **schema ingerível** (igual

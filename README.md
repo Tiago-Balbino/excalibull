@@ -24,19 +24,23 @@ board ↔ local nem duas fontes de verdade.
 
 ## Pré-requisitos Hive
 
-Configure o MCP `hive_mind` no cliente. Writers também definem:
+Instale o launcher oficial e o Mind; depois configure os agentes:
 
 ```bash
-export HIVE_INSTANCE_DIR=/caminho/hive_instance
-# HIVE_DATA_DIR é lido de config/hive.toml; overrides devem coincidir.
-export HIVE_BIN=/caminho/hive_instance/bin/hive-teste
+hive install mind
+hive login
+hive setup
+hive doctor
 export HIVE_TEAM_TAG=team-a
 export HIVE_HANDLE=seu-handle
+# Opcional: staging local fora do padrão .hive/outbox/
+export EXCALIBULL_OUTBOX_DIR=/caminho/excalibull-outbox
 ```
 
-Não versione tokens nem essas credenciais. Em reader, consultas funcionam, mas
-o handoff precisa ser entregue a um writer antes de a caçada ser considerada
-fechada.
+O MCP inicia por `hive mind` e consulta o serviço remoto. Tokens ficam sob
+responsabilidade do cliente oficial. As ferramentas não leem configuração de
+servidor nem abrem túnel. A outbox contém contribuições pendentes; elas precisam
+ser entregues a um writer e confirmadas no Hive antes do fechamento.
 
 ## Fluxo de caçada
 
@@ -53,10 +57,10 @@ modo hunter on
 postura → protocolos conforme necessidade → contra prova → report PT/EN
              │
              ▼
-handoff Hive com resultados positivos E negativos
+handoff local com resultados positivos E negativos
              │
              ▼
-ingest_workspace → get_sync_status idle → read-back
+entrega ao writer → ingestão → get_sync_status idle → read-back
              │
              ▼
 seal_gate.py <program_id> → modo hunter off
@@ -68,17 +72,25 @@ e registre-a:
 
 ```bash
 python3 tools/hive_scope_cache.py record /tmp/hive-context.json
-python3 tools/hive_scope_cache.py check api.example.com
+python3 tools/hive_scope_cache.py check https://api.example.com/api --program meu-programa
 ```
 
-Os recibos expiram, ficam em `.hive/` e não são autoridade independente: apenas
-materializam o que o Hive retornou.
+Os recibos têm TTL padrão de 15 minutos (máximo uma hora), ficam em `.hive/` e
+materializam o veredito para o programa e ativo exatos. Recibos de host não
+autorizam URLs; consulte `url_prefix` para cada URL, inclusive redirects e
+recursos filhos. A troca de programa/revisão invalida permissões anteriores.
+
+```bash
+python3 tools/hive_gateway.py context meu-programa https://api.example.com/api \
+  "Escopo e restrições para coletar esta URL" --record
+python3 tools/hive_gateway.py capabilities
+```
 
 ## Comandos principais
 
 | Código | Ação |
 |---|---|
-| `code 3` | Auxiliar de casa nova; cria ficha no writer, sem aprovar escopo. |
+| `code 3` | Auxiliar de casa nova; prepara ficha local, sem aprovar escopo ou publicar. |
 | `code 5 <program> <vuln>` | Dupcheck no Hive + fontes públicas. |
 | `code 7` | Catálogo/status do Hive. |
 | `code 7 find <program> [asset]` | Contexto ao vivo; não copia ficha. |
@@ -99,7 +111,16 @@ Definições: [CODES.md](CODES.md). Uso: [recon](docs/RECON-AMPLIADO.md) e
 
 ## Escrita no Hive
 
-Crie uma nota canônica a partir do log higienizado:
+Defina `HIVE_HANDLE` e `HIVE_TEAM_TAG` (sem defaults pessoais) e abra uma sessão
+antes dos protocolos. Para retomar, use o mesmo `--session` ou
+`EXCALIBULL_SESSION_ID`; omitir a opção reutiliza a sessão ativa do programa.
+
+```bash
+python3 tools/hive_outbox.py start etoro --session minha-sessao
+python3 tools/hive_outbox.py status etoro
+```
+
+Prepare uma contribuição a partir do log higienizado, depois de consolidar o WAL:
 
 ```bash
 python3 tools/hive_workspace.py note etoro handoff \
@@ -107,11 +128,39 @@ python3 tools/hive_workspace.py note etoro handoff \
   --asset affapi.etoro.com --tag authz
 ```
 
-Depois, no writer, use `ingest_workspace` pelo MCP (preferido) ou:
+Exporte o pacote e entregue-o pelo canal operacional ao writer:
 
 ```bash
-python3 tools/hive_workspace.py ingest
+python3 tools/hive_workspace.py export etoro --output /tmp/etoro-contribution.tar.gz
 ```
+
+O pacote inclui documentos e manifesto de hashes; sua criação mantém o estado
+`pending-writer`. O cliente remoto atual não oferece upload de arquivos locais.
+As notas têm IDs estáveis e revisões imutáveis. Repetir o mesmo conteúdo reutiliza
+a contribuição; alterar uma nota com `--replace` cria revisão e invalida a confirmação.
+Arquivos antigos fora do manifesto só podem ser exportados com `--legacy-files`,
+e esse inventário não satisfaz o Selo nem é ingerido automaticamente.
+
+Quando o workspace operacional do writer estiver acessível, a entrega e a ingestão
+exigem caminhos explícitos. A configuração do writer deve ficar fora desse workspace:
+
+```bash
+python3 tools/hive_outbox.py deliver etoro --writer-workspace /caminho/workspace-writer
+python3 tools/hive_outbox.py ingest etoro --writer-workspace /caminho/workspace-writer \
+  --writer-config /caminho/config-writer.toml
+python3 tools/hive_outbox.py verify etoro
+python3 tools/seal_gate.py etoro
+```
+
+`ingest` processa o workspace selecionado pelo MCP oficial e confere relatório por
+arquivo; não executa poda. `verify` exige fila confirmada e busca cada path, ID,
+revisão e trecho esperado no Hive remoto. A confirmação vale 15 minutos e registra
+`retrieved-fragment`: o contrato atual não comprova o hash integral do documento remoto.
+Falha parcial, `foreign_writer`, arquivo ausente, `unknown` e divergência mantêm pendência.
+
+O Selo padrão exige a sessão inteira confirmada e scratch/WAL iguais aos consolidados
+no handoff. Para apenas encerrar a execução local com publicação pendente explícita,
+use `python3 tools/seal_gate.py etoro --handoff-only`; preserve WAL/outbox.
 
 Só considere a publicação concluída quando a ingestão terminar sem falha, o
 status estiver `idle` e uma consulta recuperar a nova nota. Resultados
@@ -121,7 +170,7 @@ descartados são publicados também: eles evitam repetição.
 
 `tools/scope_hook.py` é fail-closed para URLs HTTP(S):
 
-- host com recibo Hive vigente e autorizado → permite;
+- ativo exato com recibo vigente, programa correto e autorização confirmada → permite;
 - `unknown`, `out_of_scope`, recibo expirado ou ausente → bloqueia;
 - arquivos `scope.md` em `targets/` são apenas referência e nunca autorizam;
 - loopback é liberado para a infraestrutura local.
@@ -139,7 +188,7 @@ python3 tools/hive_workspace.py catalog
 ```
 
 `setup.sh` instala o toolchain de recon. A instalação/configuração do Hive Mind
-é separada porque envolve identidade, papel reader/writer e credenciais privadas.
+é feita pelo launcher oficial e pelo login no Center.
 
 ## Mapa de arquivos
 
@@ -148,8 +197,13 @@ python3 tools/hive_workspace.py catalog
 | `CLAUDE.md`, `AGENTS.md` | Regras para agentes. |
 | `.claude/skills/hive-mind/` | Workflow Hive no Claude. |
 | `.codex/mcp-instructions.md` | Workflow Hive no Codex. |
-| `portfolio.md` | Referência histórica de EV; seleção de programas vem do Hive/instância. |
+| `portfolio.md` | Referência histórica de EV; seleção de programas vem do catálogo remoto Hive. |
+| `tools/hive_gateway.py` | Consulta o MCP oficial pelo launcher `hive mind`. |
+| `tools/hive_paths.py` | Resolve somente a outbox local. |
 | `tools/hive_scope_cache.py` | Materializa vereditos do Hive para o hook. |
-| `tools/hive_workspace.py` | Metadados da instância, catálogo writer, ficha/nota e ingestão pelo mesmo launcher. |
-| `tools/seal_gate.py` | Exige scratch, brain e handoff Hive no fechamento. |
+| `tools/hive_workspace.py` | Catálogo remoto, preparação de fichas/notas e exportação para writer. |
+| `tools/hive_documents.py` | Metadados e validação comuns, autoria e ativos concretos. |
+| `tools/hive_outbox.py` | Sessões, revisões imutáveis, hashes e exportação do conjunto esperado. |
+| `tools/hive_publication.py` | Entrega explícita, relatório do writer e read-back por contribuição. |
+| `tools/seal_gate.py` | Confere a publicação da sessão; `--handoff-only` mantém pendência explícita. |
 | `targets/_TEMPLATE/` | Estrutura de scratch, sem autoridade. |

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """endpoints — corpus de endpoints estruturado no Hive (document_type: endpoint).
 
-Transforma saída de recon (jsrecon/apkrecon/passive/manual) num corpus canônico,
+Transforma saída de recon (jsrecon/apkrecon/passive/manual) num corpus local preparado,
 DEDUPADO e queryável via hive_search(document_types=[endpoint]).
-Um único .md por programa: frontmatter + tabela humana + bloco ```json``` canônico
-(estado machine-readable relido no próximo merge → dedupe + diff incremental).
+Uma projeção local por autor preserva o dedupe; contribuições por sessão/host
+são imutáveis na outbox. A projeção não é exportada nem conta como publicação.
 
 Host vem NO INPUT (não no argv) p/ não disparar o scope_hook — é escrita local, sem tráfego.
 Formato de input (1 por linha, flexível):
@@ -15,14 +15,16 @@ Formato de input (1 por linha, flexível):
 
 Uso:
   python3 tools/endpoints.py merge toolsforhumanity --input eps.txt \
-      --source jsrecon --data-dir /.../hive_instance/data
-  python3 tools/endpoints.py list toolsforhumanity --data-dir /.../hive_instance/data
+      --source jsrecon --data-dir /caminho/excalibull-outbox
+  python3 tools/endpoints.py list toolsforhumanity --data-dir /caminho/excalibull-outbox
 """
-import argparse, json, os, re, sys
+import argparse, hashlib, json, os, re, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from file_safety import atomic_write_text, locked_file
 from hive_workspace import _program, resolve_data_dir
+from hive_documents import identity
+from hive_outbox import Outbox, prepare
 from recon_records import normalize_record, request_record, METHODS
 
 HOSTRE = re.compile(r'^(?:[a-z0-9](?:[a-z0-9\-]{0,62})\.)+[a-z]{2,}$')
@@ -81,22 +83,15 @@ def load_existing(md_path):
         raise ValueError("corpus com linhas inválidas; merge recusado")
     return {(r["host"], r["method"], r["path"]): r for r in rows}
 
-def render(program, rows, handle, team):
+def projection_path(data_dir, program, handle):
+    return Path(data_dir) / "projections" / program / f"{handle}-excalibull-endpoints-corpus.md"
+
+
+def render(program, rows, handle=None, team=None):
     rows = sorted(rows, key=lambda r: (r["host"], r["path"], r["method"]))
     hosts = sorted({r["host"] for r in rows})
-    fm = (
-        "---\n"
-        f"program_id: {program}\n"
-        "document_type: endpoint\n"
-        "classification: internal\n"
-        "source: excalibull\n"
-        f"collected_at: {_stamp()}\n"
-        f'tags: ["{team}", "{handle}", "excalibull", "endpoint-corpus"]\n'
-        f"asset_refs: {json.dumps(hosts[:60], ensure_ascii=False)}\n"
-        "---\n"
-    )
     body = [f"# Corpus de endpoints — {program} ({len(rows)} endpoints, {len(hosts)} hosts)\n",
-            "> Corpus canônico dedupado (tools/endpoints.py). Cada linha = endpoint observado.",
+            "> Corpus local dedupado (tools/endpoints.py). Cada linha = endpoint observado.",
             "> `[UNTESTED]` até prova ativa. Contexto observado não comprova autenticação ou vulnerabilidade.\n",
             "| Host | Método | Path | Parâmetros query | Contextos | Status | Fonte | 1º visto |",
             "|------|--------|------|------------------|-----------|--------|-------|----------|"]
@@ -105,11 +100,11 @@ def render(program, rows, handle, team):
         roles = sorted({ob.get('access_context', {}).get('role', 'unknown') for ob in r.get('observations', [])})
         body.append(f"| `{r['host']}` | {r['method']} | `{r['path']}` | {', '.join(query)} | {', '.join(roles)} | {r.get('status','')} "
                     f"| {r.get('source','')} | {r.get('first_seen','')[:10]} |")
-    body.append("\n<!-- estado canônico machine-readable (não editar à mão) -->")
+    body.append("\n<!-- estado local machine-readable (não editar à mão) -->")
     body.append("```json")
     body.append(json.dumps(rows, ensure_ascii=False, indent=0))
     body.append("```")
-    return fm + "\n".join(body) + "\n"
+    return "\n".join(body) + "\n"
 
 def main():
     ap = argparse.ArgumentParser()
@@ -119,20 +114,23 @@ def main():
     mg.add_argument("--input", help="arquivo (default stdin)")
     mg.add_argument("--source", default="recon")
     mg.add_argument("--status", default="")
-    mg.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
-    mg.add_argument("--handle", type=_program, default=os.environ.get("HIVE_HANDLE", "moldret"))
-    mg.add_argument("--team", type=_program, default=os.environ.get("HIVE_TEAM_TAG", "delta"))
+    mg.add_argument("--data-dir", default=os.environ.get("EXCALIBULL_OUTBOX_DIR", ""))
+    mg.add_argument("--handle", type=_program, default=os.environ.get("HIVE_HANDLE"))
+    mg.add_argument("--team", type=_program, default=os.environ.get("HIVE_TEAM_TAG"))
+    mg.add_argument("--session")
     ls = sub.add_parser("list", help="conta/mostra o corpus atual")
     ls.add_argument("program", type=_program)
-    ls.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""))
+    ls.add_argument("--data-dir", default=os.environ.get("EXCALIBULL_OUTBOX_DIR", ""))
+    ls.add_argument("--handle", type=_program, default=os.environ.get("HIVE_HANDLE"))
     a = ap.parse_args()
 
     try:
-        a.data_dir = str(resolve_data_dir(a.data_dir or None, writer=a.cmd == "merge"))
+        a.data_dir = str(resolve_data_dir(a.data_dir or None))
     except ValueError as exc:
         ap.error(str(exc))
-    notes = os.path.join(a.data_dir, "programs", a.program, "notes")
-    md_path = os.path.join(notes, f"{a.__dict__.get('handle','moldret')}-excalibull-endpoints-corpus.md")
+    if not a.handle:
+        raise ValueError("informe --handle ou HIVE_HANDLE para selecionar o corpus do autor")
+    md_path = projection_path(a.data_dir, a.program, a.handle)
 
     if a.cmd == "list":
         cur = load_existing(md_path)
@@ -147,6 +145,9 @@ def main():
         if envelope.get("program_id") not in (None, a.program):
             raise ValueError("program_id do input difere do programa selecionado")
     records, bad = read_records(raw)
+    handle, team = identity(a.handle, a.team)
+    queue = Outbox(a.data_dir)
+    session = queue.session(a.program, a.session, create=True)
     # Falha no corpus/input não pode apagar o estado anterior. Serializa escritores.
     with locked_file(Path(md_path)):
         cur = load_existing(md_path)
@@ -165,7 +166,21 @@ def main():
                 observations.append(record)
             row['last_seen'] = _stamp()
         # Método desconhecido permanece: não perder observações ao encontrar outro método.
-        atomic_write_text(Path(md_path), render(a.program, list(cur.values()), a.handle, a.team))
+        # O corpus completo é projeção local. Publicar somente hosts tocados
+        # nesta execução, acumulando as observações desta sessão.
+        for host in sorted({r['host'] for r in records}):
+            subject = "endpoints-" + hashlib.sha256(host.encode()).hexdigest()[:16]
+            current_keys = {(r['host'], r['method'], r['path']) for r in records if r['host'] == host}
+            state = queue.load(session, a.program)
+            for contribution in state['contributions'].values():
+                if contribution['subject'] == subject and contribution['handle'] == handle:
+                    previous = queue.root / contribution['revisions'][-1]['path']
+                    current_keys.update(load_existing(previous))
+            selected = [row for key, row in cur.items() if key in current_keys]
+            prepare(a.program, subject, render(a.program, selected), data_dir=a.data_dir,
+                    session=session, handle=handle, team=team, assets=[host],
+                    document_type="endpoint", tags=["endpoint-corpus"])
+        atomic_write_text(Path(md_path), render(a.program, list(cur.values())))
     print(f"[+] +{added} novos · {dup} já existentes · {bad} inválidos · total {len(cur)}", file=sys.stderr)
     print(md_path)
     return 0

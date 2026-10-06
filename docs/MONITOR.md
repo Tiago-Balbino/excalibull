@@ -59,9 +59,12 @@ registrados e marcos de achados. Eventos não registrados permanecem lacunas,
 sem virar zero uso. Há uma sessão ativa por WAL; outro programa exige outra
 sessão. Cada evento fica associado ao contexto ativo no momento.
 
-`report` prepara snapshot enquanto o monitor continua ativo; `stop` prepara a
-nota final e encerra a medição. Em reader, preparar/entregar ao writer antes de
-encerrar a publicação. A ferramenta bloqueia escrita direta em instância reader.
-Nota: `programs/<program>/notes/excalibull-monitor-<session-id>.md` na instância
-selecionada, com publicação pendente. O agente ingere, espera idle e confirma
-read-back; desligar a medição não comprova publicação.
+`start` reutiliza a sessão ativa da outbox ou aceita `--session`/`--data-dir`.
+Informe `HIVE_HANDLE` e `HIVE_TEAM_TAG`; não há autoria pessoal implícita.
+Uma sessão com métricas encerradas exige selecionar nova sessão, preservando o WAL.
+`report` prepara uma revisão imutável enquanto o monitor continua ativo; `stop`
+prepara a nota final e encerra a medição. A nota fica em `programs/<program>/notes/`
+na outbox vinculada à sessão, com ID, revisão e hash no manifesto. Não é possível
+trocar a outbox durante a medição. Prepare o handoff depois da nota final.
+Entregue via `hive_outbox.py deliver`, confira `ingest` e `verify`; desligar a
+medição não comprova publicação. O Selo confere o conjunto esperado da sessão.

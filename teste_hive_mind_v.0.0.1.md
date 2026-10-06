@@ -32,7 +32,8 @@ A edição do `CODES.md` diz "puxar scope+recon+notes do hive **pra cá**". Isso
 ## 3. Mecânica do `hive_mind` (como consultei)
 
 - Ferramentas MCP: `hive_search` (busca semântica dentro de UM programa, `program_id` obrigatório = fronteira de isolamento), `hive_get_context` (pacote de contexto por asset explícito; **avalia autoridade de escopo antes** do conteúdo untrusted), `get_sync_status`, `ingest_workspace`.
-- Instância local: `hive_instance/` (ver `memory/hive-ingest-flow.md`). Collection `hive_teste_4p`, Qdrant via túnel SSH + Ollama.
+- Registro histórico: ensaio realizado com o cliente local então disponível.
+  Operação atual: launcher `hive mind` e serviço remoto; ver `memory/hive-ingest-flow.md`.
 - **Confirmação de escopo (`hive_get_context` em `www.etoro.com`):** `status: authorized`, `confirmed: true`, `action_allowed: true`, `scope_revision: ca135501…`, casou regra `include wildcard_domain *.etoro.com`.
 
 ---

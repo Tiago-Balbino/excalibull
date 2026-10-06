@@ -39,7 +39,9 @@ _BLOCKED = set()
 
 
 def require_authorized(url):
-    if not authorized(url, _PROGRAM):
+    from hive_scope_cache import preflight
+    ok = authorized(url, _PROGRAM) if _PROGRAM else preflight([url])[0][1]
+    if not ok:
         parsed = urlparse(url)
         _BLOCKED.add(f"{parsed.hostname}{safe_path(parsed.path)}")
         raise PermissionError("sem recibo vigente para o programa/URL")
@@ -48,7 +50,7 @@ def fetch(url, timeout=15):
     # Delega ao GET compartilhado (gzip + retry/backoff + throttle).
     try:
         return http_get(url, timeout=timeout, limiter=_LIMITER,
-                        authorize=require_authorized if _PROGRAM else None)
+                        authorize=require_authorized)
     except PermissionError:
         return "", -2
 

@@ -10,16 +10,6 @@
             "statusMessage": "Carregando workspace Excalibull..."
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ss -tln 2>/dev/null | grep -q \":16334 \" || (nohup /home/nice000160/projetos/pessoal/hive_instance/scripts/abrir-tunel.sh >/tmp/hive-tunel.log 2>&1 &)",
-            "timeout": 10,
-            "statusMessage": "Garantindo tunel Qdrant (Hive)..."
-          }
-        ]
       }
     ],
     "PreToolUse": [

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""passive — agregador de recon PASSIVO (só fontes de terceiros) + diff vs Hive.
+"""passive — agregador de recon PASSIVO (só fontes de terceiros) + diff vs staging local.
 
 Junta subdomínios/hosts de várias fontes que NÃO tocam o alvo, dedupe, filtra por
-escopo, sinaliza não-produção, e compara com o que o Hive já conhece (notas do
-programa) pra imprimir só o DELTA novo. Alimenta o `achar o x` sem recibo.
+escopo, sinaliza não-produção, e compara com as observações do staging local (cobertura parcial) pra imprimir só o DELTA novo. Alimenta o `achar o x` sem recibo.
 
 Fontes sem chave: crt.sh, AlienVault OTX, HackerTarget, urlscan.io, Wayback/CDX.
 Com chave (env, opcional): VirusTotal (VT_API_KEY), SecurityTrails (STRAILS_API_KEY),
@@ -11,7 +10,7 @@ Shodan (SHODAN_API_KEY). Ausência de chave = fonte pulada (nunca hardcode).
 
 Uso:
   python3 tools/passive.py worldcoin.org world.org --diff-program toolsforhumanity \
-      --data-dir /.../hive_instance/data
+      --data-dir /caminho/excalibull-outbox
   python3 tools/passive.py exemplo.com          # sem diff, só agrega
 """
 import argparse, base64, gzip, hashlib, io, json, os, re, sys, time, urllib.request, urllib.error
@@ -202,8 +201,8 @@ def src_censys(d):
         return out, f"parse:{e}"
     return out, "ok"
 
-def known_from_hive(program, data_dir):
-    """Extrai hosts já conhecidos das notas+scope.json do programa no Hive."""
+def known_from_staging(program, data_dir):
+    """Extrai hosts do staging local; cobertura remota não é inferida."""
     known = set()
     base = os.path.join(data_dir, "programs", program)
     if not os.path.isdir(base):
@@ -246,8 +245,8 @@ def _run_source(name, fn, d, kind, ttl):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("domains", nargs="+", help="domínios base (ex.: worldcoin.org world.org)")
-    ap.add_argument("--diff-program", default="", help="program_id p/ diff vs Hive")
-    ap.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", ""), help="dir do Hive")
+    ap.add_argument("--diff-program", default="", help="program_id p/ diff vs staging local")
+    ap.add_argument("--data-dir", default=os.environ.get("EXCALIBULL_OUTBOX_DIR", ""), help="staging local; não representa inventário remoto")
     ap.add_argument("--urls", action="store_true", help="também listar URLs (urlscan+wayback)")
     ap.add_argument("--workers", type=int, default=10, help="fetches paralelos (fontes×domínios)")
     ap.add_argument("--cache-ttl", type=int, default=3600,
@@ -291,10 +290,10 @@ def main():
     prod = sorted(h for h in scoped if not NONPROD.search(h))
     nonprod = sorted(h for h in scoped if NONPROD.search(h))
 
-    # calcula delta vs Hive (independe do formato de saída)
+    # calcula delta vs staging local (sem alegar novidade no Hive)
     new_prod, new_nonprod, known_n = None, None, None
     if a.diff_program and a.data_dir:
-        known, st = known_from_hive(a.diff_program, a.data_dir)
+        known, st = known_from_staging(a.diff_program, a.data_dir)
         known_n = len(known)
         new_prod = [h for h in prod if h not in known]
         new_nonprod = [h for h in nonprod if h not in known]
@@ -309,7 +308,8 @@ def main():
             "nonprod": nonprod,
             "delta_prod": new_prod,          # None se sem --diff-program
             "delta_nonprod": new_nonprod,
-            "known_in_hive": known_n,
+            "known_in_staging": known_n,
+            "baseline_coverage": "local-only",
             "urls": scoped_urls,
             "sources": [{"domain": d, "source": n, "hosts": nh, "urls": nu, "status": st}
                         for (d, n, nh, nu, st) in sorted(results)],
@@ -323,12 +323,12 @@ def main():
 
     if a.diff_program:
         if not a.data_dir:
-            print("\n[!] --diff-program precisa de --data-dir (ou HIVE_DATA_DIR)", file=sys.stderr)
+            print("\n[!] --diff-program precisa de --data-dir (ou EXCALIBULL_OUTBOX_DIR)", file=sys.stderr)
         else:
-            print(f"\n[*] Hive '{a.diff_program}': {known_n} hosts conhecidos", file=sys.stderr)
-            print(f"\n===== 🆕 DELTA — PROD novo no Hive ({len(new_prod)}) =====")
+            print(f"\n[*] Staging '{a.diff_program}': {known_n} hosts conhecidos", file=sys.stderr)
+            print(f"\n===== 🆕 DELTA — PROD ausente no staging ({len(new_prod)}) =====")
             for h in new_prod: print(h)
-            print(f"\n===== 🆕 DELTA — não-prod novo ({len(new_nonprod)}) =====")
+            print(f"\n===== 🆕 DELTA — não-prod ausente no staging ({len(new_nonprod)}) =====")
             for h in new_nonprod[:80]: print(h)
     else:
         print(f"\n===== PROD ({len(prod)}) =====");    [print(h) for h in prod]

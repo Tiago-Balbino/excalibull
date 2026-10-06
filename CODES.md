@@ -34,11 +34,11 @@ confiável. Publicação exige ingestão sem falhas, fila `idle` e read-back.
 ### `code 3` — auxiliar de casa nova
 
 Usar os três dados e o conteúdo recebidos pelo protocolo casa nova. Resolver
-`hive_instance`, normalizar program_id e criar `programs/<program_id>/notes/`
+a outbox local, normalizar program_id e preparar `programs/<program_id>/notes/`
 com ficha e documentos focados. Não depender de `targets/_TEMPLATE`/portfolio
 para criar a ficha. Não sobrescrever programa existente nem criar/aprovar
 `scope.json`/`rules.md`. Ferramenta: `tools/hive_workspace.py create-program`.
-Escrita no writer deixa publicação pendente; completar pelo code 7 send.
+Preparação local mantém `pending-writer`; completar entrega e confirmação pelo code 7 send.
 
 ### `code 5 <program> <candidato>` — dupcheck
 
@@ -57,17 +57,21 @@ Escrita no writer deixa publicação pendente; completar pelo code 7 send.
 
 - `find`: visão geral, estado, evidências e negativos via `hive_search`;
   quando houver asset, `hive_get_context` tipado. Nunca criar fork canônico local.
-- `send`: resolver o destino pela instância; sanitizar positivos/negativos e
-  preparar notas focadas com `asset_refs`. Ingerir nessa mesma instância,
-  exigir relatório sem falhas, `get_sync_status=idle` e recuperar a nota por
-  read-back. Erro/divergência mantém publicação pendente.
-- Sem operação: `get_sync_status` e catálogo explícito de program_id. O catálogo
-  do writer (`hive_workspace.py catalog`) enumera pastas locais; indicar essa
-  origem e não alegar completude de programas remotos ou ingestão confirmada.
+- `send`: higienizar positivos/negativos e preparar notas com `asset_refs` na
+  sessão ativa da outbox (`hive_outbox.py start/status`). Exportar pelo
+  `hive_workspace.py export`; com writer acessível, usar `hive_outbox.py deliver`,
+  `ingest --writer-workspace ... --writer-config ...` e `verify`. Conferir o
+  conjunto esperado pelo `seal_gate.py`; `--handoff-only` registra pendência local. O MCP
+  remoto não recebe os arquivos locais. Erro/divergência mantém publicação pendente.
+- Sem operação: `get_sync_status` e catálogo remoto paginado (`hive_list_targets`
+  ou `hive_workspace.py catalog`). Consumir `next_offset`, avisos e truncamento;
+  projeto listado não autoriza tráfego. `unknown` não comprova fila vazia.
   Não iniciar ingestão só por consultar status/catálogo.
 
 Busca semântica exige program_id; não existe `hive_search` cross-program.
-Consultar `tools/hive_workspace.py workspace` para metadados sem credenciais.
+Consultar `tools/hive_workspace.py workspace` para metadados do staging local sem credenciais.
+Cada contribuição tem identidade estável para retry; conteúdo alterado cria revisão.
+O read-back confirma trechos identificados, sem alegar hash integral remoto.
 
 ### `code 8 <program>` — brief combinado
 
@@ -104,7 +108,7 @@ arsenal transversais. Estimativa de recompensa não é pagamento recebido.
 ## Protocolos
 
 Exibir o fluxo selecionado, o estágio atual e resultados/pendências. Todo recon
-fecha com nota focada no writer Hive, ingestão, idle e read-back. Protocolos
+fecha com nota focada na outbox, entrega a writer, ingestão, idle e read-back. Protocolos
 investigativos seguem a postura vigente e as regras do programa.
 
 | Protocolo | Objetivo |
@@ -132,12 +136,12 @@ de requisitos nem inventar informações.
 
 1. Consultar catálogo/Hive para colisões. Derivar program_id do nome (minúsculas,
    números, hífen/underscore, até 64 caracteres), preservando nome de apresentação.
-2. Resolver o workspace de hive_instance. Code 3 cria nova pasta no writer e
+2. Resolver a outbox local. Code 3 prepara uma nova pasta de contribuições e
    organiza ficha com autoria, plataforma, nome, ID, fontes, ativos observados,
    informações recebidas e lacunas. Separar documentos focados quando pertinente.
 3. Revisar segredos/PII. Informação recebida sobre escopo é observação; não cria
    aprovação, não altera `scope.json`/`rules.md` automaticamente.
-4. Code 7 send: ingerir, esperar idle e read-back. Retornar ID, pasta, arquivos
+4. Code 7 send: exportar/entregar a writer, confirmar ingestão, idle e read-back. Retornar ID, pasta, arquivos
    e estado real de publicação. Se houver colisão, apresentar e aguardar a
    decisão de atualizar/usar outro ID, sem sobrescrever silenciosamente.
 
@@ -181,7 +185,7 @@ sensíveis por placeholders explicados; referências devem apontar a artefatos
 reais. Ausência de evidência/etapa fica pendente. Não completar a reprodução
 com observações inventadas. Aplicar code 11 nas duas versões e comparar tradução,
 alegações, severidade, etapas e referências. Preparar drafts em scratch e notas
-compatíveis no writer da instância; publicação pelo code 7 send. Humano revisa e
+compatíveis na outbox local; publicação pelo code 7 send. Humano revisa e
 submete à plataforma.
 
 ### `protocolo achar o x` — descoberta passiva
@@ -192,7 +196,7 @@ artefatos já disponíveis. JS/source maps vêm de cópias locais/arquivadas, se
 buscar diretamente no alvo. `tools/passive.py` auxilia inventário/diff.
 
 Organizar hosts, rotas, stack, origem/data, sinais e perguntas `[UNTESTED]`.
-Não inferir aprovação dos ativos; fontes/diff do writer não garantem cobertura
+Não inferir aprovação dos ativos; fontes/diff do staging não garantem cobertura remota
 completa. Se precisar de contato direto, encaminhar ao saquear o navio conforme
 postura e autorização. Publicar delta útil e negativos no Hive pelo code 7 send.
 
@@ -222,7 +226,7 @@ requisições e revisita de ativos conhecidos. Usa `tools/perola_negra.py`;
 é complementar ao `achar o x` e ao `saquear o navio`.
 
 1. Consultar Hive por contexto/regras, negativos e recon anterior; selecionar
-   `program_id` e o diretório de dados da `hive_instance`.
+   `program_id` e o staging local de contribuições.
 2. Importar HAR local ou observar Chromium via CDP local. Operador conduz contas
    e fluxos autorizados; usar aliases de papel/fluxo. HAR é offline; CDP não
    navega/reproduz requests e só registra URLs com recibo vigente do programa.
@@ -235,7 +239,7 @@ requisições e revisita de ativos conhecidos. Usa `tools/perola_negra.py`;
 5. Comparar superfície/hashes e informar primeira observação, mudanças,
    igualdade, falha, bloqueio e cobertura parcial. Não substituir baseline
    completo por parcial, nem inferir ausência de bug por igualdade.
-6. Escrever corpus/snapshot/cobertura no writer; revisar, ingerir, aguardar `idle`
+6. Preparar corpus/snapshot/cobertura na outbox; revisar, entregar a writer, ingerir e aguardar `idle`
    e confirmar read-back. Escrita local retorna publicação pendente.
 
 Comandos e limitações: [docs/RECON-AMPLIADO.md](docs/RECON-AMPLIADO.md).
@@ -340,7 +344,7 @@ acompanhando os modos/protocolos da sessão; não executa recon em segundo plano
    disponíveis. Candidato não confirmado permanece distinto de achado.
 5. Mostrar resumo por sessão e operações/protocolos, chamadas/tempos do Hive,
    tokens observados, tempo até cada achado e lacunas de instrumentação.
-6. Preparar nota de métricas no writer da instância Hive; code 7 send ingere,
+6. Preparar nota de métricas na outbox; code 7 send entrega a writer e confirma ingestão,
    aguarda idle e confirma read-back. WAL de métricas não substitui publicação.
 
 Os runners do saquear/pérola negra registram duração dos subprocessos quando o
@@ -471,7 +475,7 @@ idle e read-back; não descartar pendências ao trocar modos.
 ### `modo dojo` — treino: write-up → conhecimento retido 🥋
 Ativação: **"abre o dojo"** / **"modo dojo on"**. Desliga: **"fecha o dojo"** / **"modo dojo off"**.
 Objetivo: aprender mecanismos e alimentar os sinais para reconhecer padrões em casos novos.
-Usa a estrutura atual de `memory/`; a arquitetura futura está em [PLANO-DOJO.md](PLANO-DOJO.md).
+Usa a estrutura atual de `memory/`; a arquitetura futura está em [PLANO-DOJO.md](../HIVE/hive_atlas/PLANO-DOJO.md).
 
 **Entrada e estado:**
 1. **Dojo e hunter/bicicleta são exclusivos.** Se houver caçada em andamento, suspender o modo de caçada e os testes diretos; preservar `program_id`, objetivo, evidências, hipóteses, postura anterior, próximo passo e publicações pendentes. A troca de modo não equivale a encerrar/publicar a caçada.

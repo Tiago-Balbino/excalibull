@@ -2,7 +2,7 @@
 """Testes dos guards de enforcement do Excalibull.
 
 Cobre scope_hook, validity_guard, cvss_version_guard, file_path_guard e o
-endurecimento de record_scope em hive_scope_cache. Os hooks são exercitados como
+recibos exatos em hive_scope_cache. Os hooks são exercitados como
 o harness os chama (stdin JSON → stdout JSON); a lógica de biblioteca é importada
 direto. Rode com: python3 -m pytest tests/test_guards.py -q
 """
@@ -226,42 +226,12 @@ def test_fpg_handles_multiedit():
     assert is_block(run_hook("file_path_guard.py", payload))
 
 
-# --------------------------------------------------- hive_scope_cache.record_scope
-def _sample_scope_dir():
-    """Cria um scope.json de teste em tmp e devolve (data_dir, program)."""
-    tmp = Path(tempfile.mkdtemp())
-    prog_dir = tmp / "programs" / "tprog"
-    prog_dir.mkdir(parents=True)
-    (prog_dir / "scope.json").write_text(json.dumps({
-        "schema_version": 1,
-        "program_id": "tprog",
-        "rules": [
-            {"action": "include", "asset_type": "host", "value": "app.tprog.example"},
-            {"action": "exclude", "asset_type": "host", "value": "blog.tprog.example"},
-        ],
-    }))
-    return str(tmp), "tprog"
-
-
-def test_record_scope_rejects_non_hash_revision(monkeypatch, tmp_path):
-    import hive_scope_cache as h
-    monkeypatch.setattr(h, "CACHE_PATH", tmp_path / "cache.json")
-    data_dir, prog = _sample_scope_dir()
-    with pytest.raises(ValueError):
-        h.record_scope(prog, data_dir, "approved")
-
-
-def test_record_scope_accepts_hash_shape_and_stores_sha(monkeypatch, tmp_path):
-    import hive_scope_cache as h
-    monkeypatch.setattr(h, "CACHE_PATH", tmp_path / "cache.json")
-    data_dir, prog = _sample_scope_dir()
-    recs = h.record_scope(prog, data_dir, "a" * 64)
-    assert len(recs) == 2
-    assert all(len(r["scope_sha256"]) == 64 for r in recs)
-    # include→allow, exclude→deny
-    allow = {r["asset"]["value"]: r["action_allowed"] for r in recs}
-    assert allow["app.tprog.example"] is True
-    assert allow["blog.tprog.example"] is False
+# A CLI de recibos não admite aprovação por documento local.
+def test_local_scope_command_is_not_available():
+    import hive_scope_cache as cache
+    with pytest.raises(SystemExit) as error:
+        cache.main(["record-scope", "example", "--revision", "a" * 64])
+    assert error.value.code == 2
 
 
 # ------------------------------------- preflight de escopo (recon/cors #14)

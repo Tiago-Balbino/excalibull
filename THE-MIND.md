@@ -95,7 +95,7 @@ alta. A coluna **rules/** diz o que carregar junto.
 | Situação | Comando | Carregar de rules/ |
 |---|---|---|
 | Operar **sem disparar flag** (stealth) / alvo novo / escopo dúbio | `postura escudo` | — |
-| Escolher **qual programa** caçar | catálogo Hive/instância → `program_id` explícito → `modo hunter` | — |
+| Escolher **qual programa** caçar | catálogo remoto Hive → `program_id` explícito → `modo hunter` | — |
 | Consultar contexto de programa/asset | `code 7 find <program> [asset]` (Hive ao vivo) | — |
 | Publicar o estado da sessão | `code 7 send <program>` (ingest + idle + read-back) | — |
 | Ver catálogo e fila | `code 7` | — |
@@ -124,7 +124,7 @@ alta. A coluna **rules/** diz o que carregar junto.
 
 **Modos e posturas:** hunter é persistente; ao ativar hunter/bicicleta, perguntar a postura (escudo ou lança) antes de seguir pelo cérebro. Posturas ajustam o modo sem sobrescrevê-lo. Escudo demonstra e lança testa diretamente sob autorização. Formação de tridente é protocolo de comparação entre browsers e segue a postura vigente. Protocolos disponibilizados não se ligam todos automaticamente.
 
-**Hunter/bicicleta e dojo são exclusivos.** Entrar no dojo durante uma caçada suspende hunter e os testes diretos, preservando alvo, contexto, próximo passo e publicação pendente. O dojo usa o cérebro para estudar mecanismos, exercitar reconhecimento e alimentar sinais; lê contexto do Hive e formula hipóteses sem testar diretamente o alvo. Ao voltar ao hunter, perguntar a postura. Trocar de modo não encerra a sessão nem substitui o Selo e a confirmação de publicação. Fluxo atual em CODES.md; arquitetura futura em [PLANO-DOJO.md](PLANO-DOJO.md).
+**Hunter/bicicleta e dojo são exclusivos.** Entrar no dojo durante uma caçada suspende hunter e os testes diretos, preservando alvo, contexto, próximo passo e publicação pendente. O dojo usa o cérebro para estudar mecanismos, exercitar reconhecimento e alimentar sinais; lê contexto do Hive e formula hipóteses sem testar diretamente o alvo. Ao voltar ao hunter, perguntar a postura. Trocar de modo não encerra a sessão nem substitui o Selo e a confirmação de publicação. Fluxo atual em CODES.md; arquitetura futura em [PLANO-DOJO.md](../HIVE/hive_atlas/PLANO-DOJO.md).
 
 ## §3.1 — Os 4 pontos de desistência (e por que atravessar)
 
@@ -215,8 +215,12 @@ duplicate policy browser-rejected da-killed`.
 - Todo beco-sem-saída de chain → `record ... chain "dead-end: ..."`.
 
 **Selo de saída:** consolidar scratch/WAL, criar handoff canônico, ingerir, esperar fila
-`idle` e confirmar a nota por read-back. `seal_gate.py <program>` verifica o lado local e a
-presença do handoff no workspace; o agente ainda precisa verificar ingestão/read-back.
+`idle` e confirmar as contribuições por read-back. `hive_outbox.py` mantém o conjunto
+esperado por sessão, revisões e tentativas. `seal_gate.py <program>` exige esse conjunto
+ingerido/recuperado e verifica hashes do scratch/WAL consolidados no handoff.
+`--handoff-only` permite encerrar a execução local com PUBLICAÇÃO PENDENTE e preservar
+WAL/outbox. Preparação/exportação não significa publicação; o read-back prova trechos
+identificados, sem comprovar o hash integral remoto.
 
 ---
 
@@ -275,13 +279,13 @@ Cada decisão: **Data · Decisão · Por quê · Status**. Não apagar — regis
   com evidências. Formação de tridente é protocolo entre navegadores, seguindo
   a postura vigente; essa classificação substitui a decisão anterior de postura.
 - **Instância e números:** destinos e launcher de ingestão vêm da mesma
-  hive_instance configurada. Monitor registra sessão/contextos, chamadas/tempos
+  cliente oficial conectado. Monitor registra sessão/contextos, chamadas/tempos
   do Hive, usage real informado e tempo até achado; ausência não vira zero.
 - **Por quê:** orientar o trabalho por fluxos exibidos e conhecimento canônico
   no Hive, preservando o modo e a distinção entre hipóteses e resultados reais.
 - **Status:** aplicado em contratos, roteador, ferramentas e documentação.
   Planos de arquitetura futura do dojo e lacunas do recon preservados em
-  PLANO-DOJO.md e PLANO-ODISSEIA.md. Validação usa dados temporários e mocks;
+  [PLANO-DOJO.md](../HIVE/hive_atlas/PLANO-DOJO.md) e PLANO-ODISSEIA.md. Validação usa dados temporários e mocks;
   integração CDP com navegador real permanece sem execução nesta revisão.
   Suíte completa: 110 testes passaram; ajuste final de contagem de cache
   verificado com os 8 testes de integração da revisão. Arquivo temporário
