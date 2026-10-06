@@ -68,14 +68,20 @@ overridável por `EXCALIBULL_OUTBOX_DIR`.
    [--team <time>] [--handle "<$ENVVAR>"] --input <nota.md>` (ou via stdin).
    Classificação default `internal` salvo pedido do operador. Registre positivos
    **e** negativos (hipóteses descartadas = `discarded`).
-4. **Sessão / empacote / entregue.**
-   `hive_outbox.py start` identifica a sessão; `hive_workspace.py export
-   --output <...>` empacota (mantém `pending-writer`, não publica); `hive_outbox.py
-   deliver`/`ingest` com writer explícito.
-5. **Ingestão + prova.** O writer ingere. Confira: relatório por arquivo,
-   `get_sync_status` = `idle`, e **read-back** por path/ID/revisão/trecho via
-   `hive_search`/`hive_get_context` cobrindo o conjunto esperado. `unknown` **não**
-   comprova fila vazia; a prova remota é de trechos, não hash integral.
+4. **Sessão / empacote.** (até aqui o agente vai sozinho)
+   `hive_outbox.py start` identifica/abre a sessão (ou é aberta pelo
+   `create-program`); `hive_workspace.py export --output <...>` empacota o bundle
+   (mantém `pending-writer`, não publica). **O agente para aqui.**
+5. **Submissão (operador, via `!`).** `deliver` exige `--writer-workspace` e
+   `ingest` exige `--writer-workspace` + `--writer-config` — papel writer com
+   config local (Qdrant). Em **modo remoto** (`HIVE_ID` ausente, sem upload no
+   MCP) o agente NÃO tem como ingerir: o operador roda `deliver`/`ingest`/`verify`
+   com o writer dele. Humano sempre submete.
+6. **Prova (pós-ingestão).** Só vale depois que o writer ingeriu: relatório por
+   arquivo, `get_sync_status` = `idle`, e **read-back** por path/ID/revisão/trecho
+   via `hive_search`/`hive_get_context` cobrindo o conjunto esperado. Antes disso o
+   `hive_search` do programa falha/volta vazio — isso é o `pending-writer`, não
+   erro. `unknown` **não** comprova fila vazia; a prova remota é de trechos.
 
 ## Guardas (fail-closed)
 
