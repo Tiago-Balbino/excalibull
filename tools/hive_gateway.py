@@ -14,6 +14,9 @@ import threading
 import time
 
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
+# Ferramentas de ingestão preservam structuredContent e o sinal de erro MCP
+# (publicação pode falhar depois de um commit, então isError não é descartável).
+_INGEST_TOOLS = {"ingest_workspace", "hive_ingest_document"}
 
 
 class HiveError(ValueError):
@@ -108,13 +111,13 @@ class HiveClient:
             from hive_scope_cache import invalidate
             invalidate()
             raise
-        if result.get("isError") and not (name == "ingest_workspace" and accept_ingestion_error):
+        if result.get("isError") and not (name in _INGEST_TOOLS and accept_ingestion_error):
             from hive_scope_cache import invalidate
             invalidate()
             raise HiveError(f"operação {name} falhou; publicação não confirmada")
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
-            return {**structured, "_mcp_is_error": result.get("isError") is True} if name == "ingest_workspace" else structured
+            return {**structured, "_mcp_is_error": result.get("isError") is True} if name in _INGEST_TOOLS else structured
         text = "\n".join(item.get("text", "") for item in result.get("content", [])
                          if isinstance(item, dict) and item.get("type") == "text")
         if name == "get_sync_status":
@@ -131,12 +134,17 @@ class HiveClient:
             raise HiveError("Hive não retornou conteúdo estruturado") from None
         if not isinstance(result, dict):
             raise HiveError("contrato Hive inválido")
-        return {**result, "_mcp_is_error": mcp_is_error} if name == "ingest_workspace" else result
+        return {**result, "_mcp_is_error": mcp_is_error} if name in _INGEST_TOOLS else result
 
     def ingest_report(self):
         # Falhas de lote vêm em content[].text com isError; é preciso
         # preservar os outcomes, inclusive publicação seguida de falha.
         return self.call("ingest_workspace", {}, accept_ingestion_error=True)
+
+    def ingest_document(self, args):
+        # Ingestão remota direta de um único documento inline; a autoria vem do
+        # token de membro verificado pelo servidor, nunca do chamador.
+        return self.call("hive_ingest_document", args, accept_ingestion_error=True)
 
     def catalog(self, **arguments):
         return self.call("hive_list_targets", arguments)

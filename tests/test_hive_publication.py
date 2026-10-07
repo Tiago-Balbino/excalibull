@@ -317,3 +317,108 @@ for line in sys.stdin:
     assert publication.ingest(queue, sid, 'demo', workspace, config, client_factory=factory)['ok']
     assert publication.verify(queue, sid, 'demo', client_factory=factory)['ok']
     assert seal_gate.check_seal('demo')[0]
+
+
+# --- Ingestao remota direta (hive_ingest_document) ---------------------------
+
+def remote_report(*, outcome="created", published=True, ok=True, reason_code=None,
+                  path="programs/demo/imports/remote/member/doc.json"):
+    result = {"path": path, "outcome": outcome, "published": published}
+    if reason_code:
+        result["reason_code"] = reason_code
+    results = [result]
+    summary = {name: sum(r["outcome"] == name for r in results) for name in publication.OUTCOMES}
+    summary.update(total=len(results), ingested=summary["created"] + summary["updated"],
+                   scan_complete=True, results=results)
+    return {"schema_version": 1, "ok": ok, "exit_code": 0 if ok else 15,
+            "summary": summary, "_mcp_is_error": not ok}
+
+
+class RemoteClient:
+    def __init__(self, queue, sid, *, ingestion=None, status="idle", search_change=None,
+                 has_ingest=True, search_path="programs/demo/imports/remote/member/doc.json", **kwargs):
+        self.entries = queue.current(queue.load(sid))
+        self.tools = {"hive_search", "get_sync_status"}
+        if has_ingest:
+            self.tools.add("hive_ingest_document")
+        self.ingestion = ingestion
+        self.status = status
+        self.search_change = search_change
+        self.search_path = search_path
+        self.calls = []
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def ingest_document(self, args):
+        self.calls.append(("hive_ingest_document", args))
+        return self.ingestion if self.ingestion is not None else remote_report()
+    def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        if name == "get_sync_status":
+            return {"status": self.status, "queue_confirmed": self.status == "idle"}
+        entry = next(e for e in self.entries if e["marker"] == arguments["query"])
+        result = {"path": self.search_path, "text": entry["marker"] + "\n" + entry["witness"], "untrusted_content": True}
+        if self.search_change:
+            self.search_change(result)
+        return {"results": [result], "truncated": False, "warnings": []}
+
+
+def publish_remote(session, **kwargs):
+    queue, sid, entry, workspace, config = session
+    client = RemoteClient(queue, sid, **kwargs)
+    factory = lambda **kw: client
+    ingested = publication.ingest_remote(queue, sid, "demo", client_factory=factory)
+    verified = publication.verify(queue, sid, "demo", client_factory=factory)
+    return ingested, verified, client
+
+
+def test_remote_direct_ingestion_seals_without_writer_workspace(session):
+    queue, sid, entry, *_ = session
+    ingested, verified, client = publish_remote(session)
+    assert ingested["ok"] and verified["ok"]
+    assert ingested["publication"] == "indexed"
+    assert seal_gate.check_seal("demo")[0]
+    state = Outbox(queue.root).load(sid)
+    assert state["ingestion"]["mode"] == "remote"
+    assert state["verification"]["scope"] == "retrieved-fragment"
+    args = next(a for n, a in client.calls if n == "hive_ingest_document")
+    assert args["program_id"] == "demo" and args["source_format"] == "md"
+    assert args["document_type"] == "note" and args["classification"] == "internal"
+    assert entry["marker"] in args["content"]
+
+
+def test_remote_ingestion_requires_mind_ingest_grant(session):
+    ingested, verified, client = publish_remote(session, has_ingest=False)
+    assert not ingested["ok"] and not verified["ok"]
+    assert not any(n == "hive_ingest_document" for n, _ in client.calls)
+    assert not seal_gate.check_seal("demo")[0]
+
+
+def test_remote_oversized_content_requires_reconciliation(session, monkeypatch):
+    queue, sid, *_ = session
+    monkeypatch.setattr(publication, "REMOTE_CONTENT_LIMIT", 10)
+    ingested, verified, client = publish_remote(session)
+    assert not ingested["ok"] and not verified["ok"]
+    assert queue.current(queue.load(sid))[0]["state"] == "reconciliation-required"
+    assert not any(n == "hive_ingest_document" for n, _ in client.calls)
+
+
+def test_remote_published_then_failed_requires_reconciliation(session):
+    queue, sid, *_ = session
+    ingestion = remote_report(outcome="failed", published=True, ok=False, reason_code="commit_failed")
+    ingested, verified, _ = publish_remote(session, ingestion=ingestion)
+    assert not ingested["ok"] and not verified["ok"]
+    assert queue.current(queue.load(sid))[0]["state"] == "reconciliation-required"
+    assert not seal_gate.check_seal("demo")[0]
+
+
+def test_remote_unchanged_revision_confirms(session):
+    ingested, verified, _ = publish_remote(session, ingestion=remote_report(outcome="unchanged", published=False))
+    assert ingested["ok"] and verified["ok"]
+
+
+def test_remote_readback_rejects_foreign_program_path(session):
+    ingested, verified, _ = publish_remote(session, search_path="programs/other/imports/remote/x.json")
+    assert ingested["ok"] and not verified["ok"]
+    assert not seal_gate.check_seal("demo")[0]

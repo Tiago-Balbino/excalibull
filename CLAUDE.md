@@ -35,12 +35,15 @@ Para qualquer alvo: skill Hive → `THE-MIND.md` → `CODES.md` → `rules/` e
 
 Registre positivos e negativos em notas focadas, com `asset_refs`, equipe e
 handle. Nunca grave credenciais, cookies, tokens, chaves ou PII. Use
-`tools/hive_workspace.py note` para preparar na outbox local e `export` para
-entregar a writer. O MCP remoto é iniciado pelo launcher `hive mind` e não
-oferece upload de arquivos locais. Exportação mantém `pending-writer`.
-`hive_outbox.py start/status` identifica a sessão; `deliver`, `ingest` com writer
-explícito e `verify` mantêm tentativas e provas por contribuição. O relatório,
-fila confirmada e read-back por path/ID/revisão/trecho devem cobrir o conjunto
+`tools/hive_workspace.py note` para preparar na outbox local. Caminho padrão de
+publicação: `hive_outbox.py publish <program>` ingere cada nota inline pela
+ferramenta remota `hive_ingest_document` (membro logado com `product.mind` +
+`mind.ingest`; limite 16 KiB por documento) e faz o read-back, sem workspace de
+writer. Fallback: `export` + `deliver`/`ingest` com writer explícito e `verify`
+quando o workspace do writer estiver acessível; exportação mantém `pending-writer`.
+`hive_outbox.py start/status` identifica a sessão; cada caminho mantém tentativas e
+provas por contribuição. O relatório, fila confirmada e read-back por trecho
+identificado (marker + witness) no namespace do programa devem cobrir o conjunto
 esperado. `unknown` não comprova fila vazia. A prova remota é de trechos, não hash integral.
 
 

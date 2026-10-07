@@ -180,6 +180,8 @@ class Outbox:
             else:
                 contribution = {"id": cid, "subject": subject, "handle": prepared["metadata"]["handle"],
                                 "team": prepared["metadata"]["team"], "assets": prepared["assets"],
+                                "classification": prepared["metadata"]["classification"],
+                                "document_type": prepared["metadata"]["document_type"],
                                 "project": {k: prepared["metadata"].get(k) for k in ("platform", "target_name")}, "revisions": []}
                 state["contributions"][cid] = contribution
             revision = len(contribution["revisions"]) + 1
@@ -259,7 +261,7 @@ def prepare(program, subject, body, *, data_dir=None, **metadata):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("start", "status", "export", "deliver", "ingest", "verify"):
+    for name in ("start", "status", "export", "publish", "deliver", "ingest", "verify"):
         item = sub.add_parser(name)
         item.add_argument("program", type=identifier)
         item.add_argument("--session", type=session_identifier)
@@ -283,11 +285,16 @@ def main(argv=None):
             if args.command == "status":
                 result = queue.load(session)
             else:
-                from hive_publication import deliver, ingest, verify
+                from hive_publication import deliver, ingest, ingest_remote, verify
                 if args.command == "deliver":
                     result = deliver(queue, session, args.program, args.writer_workspace)
                 elif args.command == "ingest":
                     result = ingest(queue, session, args.program, args.writer_workspace, args.writer_config)
+                elif args.command == "publish":
+                    # Ingestão remota direta seguida de read-back; sem workspace de writer.
+                    result = ingest_remote(queue, session, args.program)
+                    if result.get("ok"):
+                        result = verify(queue, session, args.program)
                 else:
                     result = verify(queue, session, args.program)
         print(json.dumps(result, ensure_ascii=False, indent=2))

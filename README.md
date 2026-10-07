@@ -128,6 +128,28 @@ python3 tools/hive_workspace.py note etoro handoff \
   --asset affapi.etoro.com --tag authz
 ```
 
+As notas têm IDs estáveis e revisões imutáveis. Repetir o mesmo conteúdo reutiliza
+a contribuição; alterar uma nota com `--replace` cria revisão e invalida a confirmação.
+
+### Caminho padrão: publicação remota direta
+
+Com login de membro (`hive login`) que carrega `product.mind` + `mind.ingest`,
+publique sem workspace de writer. Cada nota vai inline pela ferramenta remota
+`hive_ingest_document` e o read-back é feito na sequência:
+
+```bash
+python3 tools/hive_outbox.py publish etoro
+python3 tools/seal_gate.py etoro
+```
+
+`publish` ingere uma contribuição por chamada, mapeia o relatório por documento e
+só marca `indexed` com publicação confirmada (ou revisão ativa inalterada); depois
+roda o `verify`. Limite de 16 KiB UTF-8 por documento no caminho remoto: notas
+maiores vão para reconciliação com motivo claro — divida-as. Sem a concessão
+`mind.ingest`, a ferramenta não é anunciada e `publish` falha pedindo novo login.
+
+### Fallback: writer local com workspace acessível
+
 Exporte o pacote e entregue-o pelo canal operacional ao writer:
 
 ```bash
@@ -135,9 +157,8 @@ python3 tools/hive_workspace.py export etoro --output /tmp/etoro-contribution.ta
 ```
 
 O pacote inclui documentos e manifesto de hashes; sua criação mantém o estado
-`pending-writer`. O cliente remoto atual não oferece upload de arquivos locais.
-As notas têm IDs estáveis e revisões imutáveis. Repetir o mesmo conteúdo reutiliza
-a contribuição; alterar uma nota com `--replace` cria revisão e invalida a confirmação.
+`pending-writer`. O cliente remoto não faz upload do pacote local (o caminho
+remoto envia conteúdo inline, não o `.tar.gz`).
 Arquivos antigos fora do manifesto só podem ser exportados com `--legacy-files`,
 e esse inventário não satisfaz o Selo nem é ingerido automaticamente.
 

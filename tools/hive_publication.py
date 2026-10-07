@@ -13,6 +13,8 @@ from hive_outbox import safe_path
 
 VERIFICATION_TTL_SECONDS = 15 * 60
 OUTCOMES = {"created", "updated", "unchanged", "skipped", "missing", "failed", "cancelled"}
+# O servidor rejeita conteúdo acima de 16384 bytes UTF-8; falhar cedo dá motivo claro.
+REMOTE_CONTENT_LIMIT = 16 * 1024
 
 
 def file_hash(path):
@@ -150,6 +152,78 @@ def ingest(queue, session, program, workspace, config, *, client_factory=HiveCli
                 "publication": "indexed" if state["ingestion_ok"] else "pending-reconciliation"}
 
 
+def ingest_remote(queue, session, program, *, client_factory=HiveClient):
+    """Ingestão remota direta: cada nota vai inline pela ferramenta hive_ingest_document.
+
+    Não exige workspace nem config de writer. A ferramenta só é anunciada para um
+    membro logado com product.mind + mind.ingest; a autoria vem do token, não daqui.
+    Uma chamada por documento, então o relatório tem exatamente um resultado e não é
+    casado por path (o servidor grava num path interno próprio).
+    """
+    with queue.edit(session, program) as state:
+        entries = queue.current(state)
+        if not entries:
+            raise ValueError("sessão sem contribuições")
+        state.update(ingestion_ok=False, verification=None, status="open")
+        all_ok = True
+        try:
+            with client_factory() as client:
+                if "hive_ingest_document" not in getattr(client, "tools", ()):
+                    raise ValueError("ingestão remota indisponível; rode hive login com concessão mind.ingest")
+                for entry in entries:
+                    entry["verification"] = None
+                    try:
+                        content = queue.bytes_for(state, entry)
+                        if len(content) > REMOTE_CONTENT_LIMIT:
+                            raise ValueError("conteúdo excede 16384 bytes; divida a contribuição")
+                        contribution = state["contributions"][entry["id"]]
+                        args = {"program_id": program, "classification": contribution["classification"],
+                                "document_type": "evidence" if contribution["document_type"] == "evidence" else "note",
+                                "source_format": "md", "content": content.decode("utf-8")}
+                        project = contribution.get("project") or {}
+                        if project.get("platform") and project.get("target_name"):
+                            args["platform"], args["target_name"] = project["platform"], project["target_name"]
+                        report = client.ingest_document(args)
+                        summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+                        results = summary.get("results") if isinstance(summary.get("results"), list) else []
+                        item = results[0] if len(results) == 1 and isinstance(results[0], dict) else None
+                        report_ok = (report.get("ok") is True and report.get("exit_code") == 0 and
+                                     report.get("_mcp_is_error", False) is False)
+                        if report_ok:
+                            # Só valida o envelope no caminho de sucesso; falha declarada
+                            # pode trazer summary incompleto e vira reconciliação/pendência.
+                            validate_report(report)
+                        if report_ok and item and (item.get("outcome") == "unchanged" or
+                                (item.get("outcome") in {"created", "updated"} and item.get("published") is True)):
+                            entry["state"], reason = "indexed", None
+                        elif item and item.get("published") is True:
+                            entry["state"], reason = "reconciliation-required", item.get("reason_code", item.get("outcome"))
+                        else:
+                            entry["state"] = "delivered"
+                            reason = (item.get("reason_code") or item.get("outcome")) if item else (report.get("error") or "missing-result")
+                        entry["attempts"].append({"at": now(), "operation": "ingest-remote", "ok": reason is None,
+                                                   "outcome": item.get("outcome") if item else "missing",
+                                                   "published": item.get("published") if item else False, "reason": reason})
+                        all_ok = all_ok and entry["state"] == "indexed"
+                    except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+                        entry.update(state="reconciliation-required", verification=None)
+                        entry["attempts"].append({"at": now(), "operation": "ingest-remote", "ok": False,
+                                                   "reason": "remote-ingest-failed-or-oversized"})
+                        all_ok = False
+        except (OSError, ValueError, KeyError, TypeError):
+            for entry in entries:
+                if entry.get("state") != "indexed":
+                    entry.update(state="reconciliation-required", verification=None)
+                entry["attempts"].append({"at": now(), "operation": "ingest-remote", "ok": False,
+                                           "reason": "writer-unavailable-or-login-required"})
+            all_ok = False
+        state["ingestion_ok"] = all_ok and all(e["state"] == "indexed" for e in entries)
+        state["ingestion"] = {"at": now(), "ok": state["ingestion_ok"], "mode": "remote",
+                              "expected": state["expected"].copy()}
+        return {"ok": state["ingestion_ok"], "session_id": session,
+                "publication": "indexed" if state["ingestion_ok"] else "pending-reconciliation"}
+
+
 def verify(queue, session, program, *, client_factory=HiveClient):
     with queue.edit(session, program) as state:
         entries = queue.current(state)
@@ -169,7 +243,13 @@ def verify(queue, session, program, *, client_factory=HiveClient):
                     raise ValueError("fila desconhecida/ocupada")
                 for entry in entries:
                     response = client.call("hive_search", {"program_id": program, "query": entry["marker"], "limit": 20})
-                    matches = [r for r in response.get("results", []) if isinstance(r, dict) and r.get("path") == entry["path"] and
+                    # O marker carrega o content_sha256 e é globalmente único; junto do
+                    # witness prova o trecho indexado. A ingestão remota grava num path
+                    # interno do servidor (programs/<program>/imports/remote/...) diferente
+                    # do path local, então a prova exige o mesmo namespace de programa, não
+                    # igualdade de path; outro programa/revisão continua sendo rejeitado.
+                    matches = [r for r in response.get("results", []) if isinstance(r, dict) and
+                               isinstance(r.get("path"), str) and r["path"].startswith(f"programs/{program}/") and
                                isinstance(r.get("text"), str) and entry["marker"] in r["text"] and entry["witness"] in r["text"]]
                     if not matches:
                         raise ValueError("contribuição não recuperada ou revisão divergente")

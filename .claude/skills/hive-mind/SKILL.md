@@ -35,13 +35,16 @@ endpoint, finding ou estado de caçada.
    A outbox local é definida por `EXCALIBULL_OUTBOX_DIR`, padrão `.hive/outbox/`.
    Exporte com `tools/hive_workspace.py export` e entregue a writer; exportação
    mantém `pending-writer` e não confirma publicação.
-6. O writer ingere; confira relatório por arquivo, `get_sync_status=idle` e
-   read-back (`hive_search`/`hive_get_context`). O MCP remoto atual não anuncia
-   `ingest_workspace` nem oferece upload. `unknown` não significa fila vazia.
-   Com workspace de writer acessível, `hive_outbox.py deliver/ingest/verify` registra
-   tentativas e prova por contribuição. O Selo padrão exige o conjunto esperado e
-   scratch/WAL vinculados ao handoff. `--handoff-only` mantém PUBLICAÇÃO PENDENTE.
-   Read-back confirma trechos identificados; não comprova hash integral remoto.
+6. Publicação. Caminho padrão (membro logado com `product.mind` + `mind.ingest`):
+   `hive_outbox.py publish <program>` ingere cada nota inline pela ferramenta
+   remota `hive_ingest_document` e já faz o read-back; sem workspace/config de
+   writer. Conteúdo remoto tem limite de 16 KiB por documento; divida notas maiores.
+   Fallback (workspace de writer acessível): `hive_outbox.py deliver/ingest/verify`
+   com caminhos explícitos. Em ambos: confira `get_sync_status=idle`, relatório por
+   contribuição e read-back (`hive_search`/`hive_get_context`); `unknown` não
+   significa fila vazia. O Selo padrão exige o conjunto esperado e scratch/WAL
+   vinculados ao handoff; `--handoff-only` mantém PUBLICAÇÃO PENDENTE. Read-back
+   confirma trechos identificados (marker + witness), não o hash integral remoto.
 
 ## Formato de escrita
 
