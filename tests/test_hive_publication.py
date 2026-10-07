@@ -422,3 +422,30 @@ def test_remote_readback_rejects_foreign_program_path(session):
     ingested, verified, _ = publish_remote(session, search_path="programs/other/imports/remote/x.json")
     assert ingested["ok"] and not verified["ok"]
     assert not seal_gate.check_seal("demo")[0]
+
+
+def test_remote_legacy_session_without_metadata_still_seals(session):
+    # Sessões antigas gravaram contribuições sem classification/document_type;
+    # a ingestão remota não pode quebrar com KeyError nem mascarar como oversized.
+    queue, sid, *_ = session
+    with queue.edit(sid, "demo") as state:
+        for contribution in state["contributions"].values():
+            contribution.pop("classification", None)
+            contribution.pop("document_type", None)
+    ingested, verified, client = publish_remote(session)
+    assert ingested["ok"] and verified["ok"]
+    assert ingested["publication"] == "indexed"
+    assert seal_gate.check_seal("demo")[0]
+    args = next(a for n, a in client.calls if n == "hive_ingest_document")
+    # Recuperado do front matter da nota preparada (defaults canônicos da fixture).
+    assert args["classification"] == "internal" and args["document_type"] == "note"
+
+
+def test_remote_document_meta_recovers_from_front_matter():
+    text = ("---\nprogram_id: demo\nclassification: restricted\n"
+            "document_type: evidence\n---\nmarker\n\ncorpo\n")
+    # Sem campos na contribuição legada, recupera os valores autoritativos da nota.
+    assert publication.remote_document_meta({}, text) == ("restricted", "evidence")
+    # Valor inválido/ausente cai no default canônico, sem levantar.
+    assert publication.remote_document_meta({"classification": "bogus"}, text) == ("internal", "evidence")
+    assert publication.remote_document_meta({}, "sem front matter") == ("internal", "note")

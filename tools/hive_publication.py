@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -15,6 +16,35 @@ VERIFICATION_TTL_SECONDS = 15 * 60
 OUTCOMES = {"created", "updated", "unchanged", "skipped", "missing", "failed", "cancelled"}
 # O servidor rejeita conteúdo acima de 16384 bytes UTF-8; falhar cedo dá motivo claro.
 REMOTE_CONTENT_LIMIT = 16 * 1024
+# Espelham os conjuntos válidos de hive_documents.document; defaults canônicos
+# do `note` quando a contribuição legada não traz os campos.
+REMOTE_DOCUMENT_TYPES = {"note", "endpoint", "asset", "evidence"}
+REMOTE_CLASSIFICATIONS = {"internal", "restricted"}
+_FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+
+
+def _front_matter_scalar(text, key):
+    """Recupera um escalar do front matter da nota preparada (render() emite
+    classification/document_type como escalar sem aspas)."""
+    block = _FRONT_MATTER.match(text or "")
+    if not block:
+        return None
+    found = re.search(rf"(?m)^{re.escape(key)}:[ \t]*\"?([a-z0-9_-]+)\"?[ \t]*$", block.group(1))
+    return found.group(1) if found else None
+
+
+def remote_document_meta(contribution, text):
+    """classification/document_type de uma contribuição para ingestão remota,
+    tolerando sessões antigas sem esses campos: usa o valor gravado, senão o
+    front matter da nota (autoritativo), senão os defaults canônicos. Valida
+    contra os conjuntos conhecidos e nunca levanta KeyError."""
+    classification = contribution.get("classification") or _front_matter_scalar(text, "classification") or "internal"
+    if classification not in REMOTE_CLASSIFICATIONS:
+        classification = "internal"
+    document_type = contribution.get("document_type") or _front_matter_scalar(text, "document_type") or "note"
+    if document_type not in REMOTE_DOCUMENT_TYPES:
+        document_type = "note"
+    return classification, document_type
 
 
 def file_hash(path):
@@ -176,10 +206,12 @@ def ingest_remote(queue, session, program, *, client_factory=HiveClient):
                         content = queue.bytes_for(state, entry)
                         if len(content) > REMOTE_CONTENT_LIMIT:
                             raise ValueError("conteúdo excede 16384 bytes; divida a contribuição")
+                        text = content.decode("utf-8")
                         contribution = state["contributions"][entry["id"]]
-                        args = {"program_id": program, "classification": contribution["classification"],
-                                "document_type": "evidence" if contribution["document_type"] == "evidence" else "note",
-                                "source_format": "md", "content": content.decode("utf-8")}
+                        classification, document_type = remote_document_meta(contribution, text)
+                        args = {"program_id": program, "classification": classification,
+                                "document_type": "evidence" if document_type == "evidence" else "note",
+                                "source_format": "md", "content": text}
                         project = contribution.get("project") or {}
                         if project.get("platform") and project.get("target_name"):
                             args["platform"], args["target_name"] = project["platform"], project["target_name"]
@@ -205,10 +237,13 @@ def ingest_remote(queue, session, program, *, client_factory=HiveClient):
                                                    "outcome": item.get("outcome") if item else "missing",
                                                    "published": item.get("published") if item else False, "reason": reason})
                         all_ok = all_ok and entry["state"] == "indexed"
-                    except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+                    except (OSError, ValueError, KeyError, TypeError, UnicodeError) as exc:
+                        # Preserva a causa real (oversized, hash divergente, erro
+                        # remoto/login) em vez de um motivo genérico enganoso.
+                        reason = str(exc).strip() or type(exc).__name__
                         entry.update(state="reconciliation-required", verification=None)
                         entry["attempts"].append({"at": now(), "operation": "ingest-remote", "ok": False,
-                                                   "reason": "remote-ingest-failed-or-oversized"})
+                                                   "reason": reason})
                         all_ok = False
         except (OSError, ValueError, KeyError, TypeError):
             for entry in entries:
