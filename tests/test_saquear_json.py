@@ -57,6 +57,74 @@ def test_passive_json_emits_prod_and_delta(monkeypatch):
     assert out["delta_prod"] is None  # sem --diff-program
 
 
+def test_classify_env_labels_environments():
+    cases = {
+        "app.ex.com": "prod", "ex.com": "prod",
+        "staging.ex.com": "staging", "stage-1.ex.com": "staging",
+        "api-dev.ex.com": "dev", "devnet.ex.com": "dev",
+        "qa.ex.com": "qa", "uat.ex.com": "uat", "sandbox.ex.com": "sandbox",
+        "internal.ex.com": "internal", "sepolia.ex.com": "testnet",
+        "x.testnet.ex.com": "testnet", "e2e.ex.com": "test",
+    }
+    for host, env in cases.items():
+        assert passive.classify_env(host) == env, host
+
+
+def test_passive_json_inventory_preserves_prod_and_nonprod(monkeypatch):
+    # duas fontes, prod + não-prod; proveniência por ativo deve ser agregada
+    monkeypatch.setattr(passive, "_HOST_SOURCES",
+                        (("crt.sh", lambda d: ({f"app.{d}", f"staging.{d}"}, "ok")),
+                         ("otx", lambda d: ({f"app.{d}", f"qa.{d}"}, "ok"))))
+    monkeypatch.setattr(passive, "_URL_SOURCES", ())
+    out = _run_json(passive, ["passive.py", "ex.com", "--json", "--cache-ttl", "0"], monkeypatch)
+    assert "inventory" in out
+    inv = {e["host"]: e for e in out["inventory"]}
+    # prod E não-prod preservados no mesmo inventário (não só um contador lateral)
+    assert set(inv) == {"app.ex.com", "staging.ex.com", "qa.ex.com"}
+    assert inv["app.ex.com"]["environment"] == "prod" and inv["app.ex.com"]["prod"] is True
+    assert inv["staging.ex.com"]["environment"] == "staging" and inv["staging.ex.com"]["prod"] is False
+    assert inv["qa.ex.com"]["environment"] == "qa"
+    # proveniência por ativo agregada entre fontes
+    assert inv["app.ex.com"]["sources"] == ["crt.sh", "otx"]
+    assert inv["qa.ex.com"]["sources"] == ["otx"]
+    # escopo e autorização: nenhum ativo passivo é sondável sem contexto ao vivo
+    for e in out["inventory"]:
+        assert e["in_scope"] is True
+        assert e["probe_authorization"] == "pending-per-asset"
+        assert e["new"] is None  # sem --diff-program não há baseline
+
+
+def test_passive_inventory_new_flag_tracks_local_baseline(monkeypatch, tmp_path):
+    base = tmp_path / "programs" / "prog"
+    base.mkdir(parents=True)
+    (base / "known.md").write_text("conhecido: app.ex.com", encoding="utf-8")
+    monkeypatch.setattr(passive, "_HOST_SOURCES",
+                        (("crt.sh", lambda d: ({f"app.{d}", f"novo.{d}", f"dev.{d}"}, "ok")),))
+    monkeypatch.setattr(passive, "_URL_SOURCES", ())
+    from hive_workspace import _program, resolve_data_dir  # noqa: F401
+    monkeypatch.setattr(passive, "_program", _program, raising=False)
+    out = _run_json(passive, ["passive.py", "ex.com", "--json", "--cache-ttl", "0",
+                              "--diff-program", "prog", "--data-dir", str(tmp_path)], monkeypatch)
+    inv = {e["host"]: e for e in out["inventory"]}
+    assert inv["app.ex.com"]["new"] is False      # já no baseline local
+    assert inv["novo.ex.com"]["new"] is True       # ausente no staging
+    assert inv["dev.ex.com"]["new"] is True and inv["dev.ex.com"]["environment"] == "dev"
+
+
+def test_saquear_consumes_inventory_contract():
+    pv = {"inventory": [
+        {"host": "staging.ex.com", "environment": "staging", "prod": False,
+         "sources": ["crt.sh"], "in_scope": True, "new": True,
+         "probe_authorization": "pending-per-asset"},
+        "lixo-nao-dict",
+    ]}
+    inv = saquear.inventory_from_passive(pv)
+    assert [e["host"] for e in inv] == ["staging.ex.com"]  # itens inválidos descartados
+    assert inv[0]["environment"] == "staging"
+    assert saquear.inventory_from_passive({}) == []
+    assert saquear.inventory_from_passive(None) == []
+
+
 def test_saquear_consumes_emitted_contract(monkeypatch):
     # jsrecon emite → saquear consome
     js = {"api_endpoints": ["/api/v2/x", "no-slash"],

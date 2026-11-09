@@ -54,6 +54,16 @@ def new_hosts_from_passive(data):
     return list((data or {}).get("delta_prod") or [])
 
 
+def inventory_from_passive(data):
+    """Inventário por ativo (prod E não-prod) com ambiente, fontes e escopo.
+
+    Preserva ambientes não-produtivos em vez de reduzi-los a um contador. Nenhum
+    item aqui autoriza tráfego: `probe_authorization` fica pendente por ativo e
+    cada URL exige hive_get_context ao vivo antes de sondar.
+    """
+    return [a for a in ((data or {}).get("inventory") or []) if isinstance(a, dict)]
+
+
 def endpoints_from_jsrecon(host, data):
     eps = [p for p in (data or {}).get("api_endpoints", []) if isinstance(p, str) and p.startswith("/")]
     return [f"{host} {p}" for p in eps]
@@ -101,12 +111,17 @@ def main():
         data = parse_json(out)
         atomic_write_text(scratch / "passive.json", json.dumps(data or {}, ensure_ascii=False, indent=2))
         errors = any(str(s.get("status", "")).lower().startswith(("err", "timeout", "fail")) for s in (data or {}).get("sources", []))
+        inventory = inventory_from_passive(data)
         report["steps"].append({"step": "passive", "status": "partial" if rc or data is None or errors else "collected",
                                 "new_hosts": new_hosts_from_passive(data),
                                 "observed_prod": (data or {}).get("prod", []),
                                 "observed_nonprod": (data or {}).get("nonprod", []),
                                 "new_nonprod_hosts": (data or {}).get("delta_nonprod") or [],
                                 "new_nonprod_count": len((data or {}).get("delta_nonprod") or []),
+                                "inventory": inventory,
+                                "inventory_count": len(inventory),
+                                "probe_authorization": "pending-per-asset",
+                                "note": "inventário passivo (prod+não-prod) preservado; sondar exige hive_get_context por ativo",
                                 "baseline_coverage": "local-only"})
     urls = list(dict.fromkeys(a.url + [f"https://{h.strip()}/" for h in a.spa_hosts.split(",") if h.strip()]))
     for index, url in enumerate(urls):

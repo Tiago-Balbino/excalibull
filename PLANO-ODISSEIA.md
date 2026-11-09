@@ -15,7 +15,7 @@ Uso e limites em [docs/RECON-AMPLIADO.md](docs/RECON-AMPLIADO.md).
 |---|---|---|
 | Aplicativos móveis | `apkrecon.py` analisa APK/XAPK/APKS localmente, mas não integra os protocolos | Módulo opcional de APK com hosts, endpoints, deeplinks e configs. Artefato rastreável e sanitizado no Hive, distinguindo extração estática de comportamento real; sem autorização automática de hosts |
 | OpenAPI, Postman e schema GraphQL | JS/capturas extraem rotas/nomes de operações, sem contratos completos | Importar documentos disponíveis, separar declarado/observado e manter métodos, tipos e relações; fixtures de versões e operações não observadas; introspecção remota depende de autorização |
-| Dev/staging/QA | `passive.py` retorna `delta_nonprod`; `saquear.py` aproveita somente `delta_prod` | Preservar ambos no inventário com ambiente, fonte e escopo; avaliar autorização por ativo antes de sondar |
+| Dev/staging/QA | **Implementado.** `passive.py --json` emite `inventory` (prod E não-prod) com `environment`, `sources`, `in_scope`, `new` e `probe_authorization: pending-per-asset`; `saquear.py` preserva esse inventário no relatório de cobertura. Sondar continua exigindo `hive_get_context` por ativo ao vivo; nada aqui autoriza tráfego | Concluído: ambos os ambientes no inventário com ambiente/fonte/escopo e autorização por ativo pendente |
 | WebSockets/eventos | Captura atual conserva estrutura HTTP, sem interpretar mensagens WebSocket, SSE ou protocolos binários | Módulo por transporte com direção, tipo/schema e sequência sanitizados; limites explícitos e sem conteúdo sensível persistido |
 
 ## Profundidade e qualidade da cobertura
@@ -46,7 +46,8 @@ demais protocolos seguem na revisão em andamento.
 
 ## Ordem sugerida para implementação futura
 
-1. Preservar ambientes não produtivos no inventário passivo.
+1. ~~Preservar ambientes não produtivos no inventário passivo.~~ **Feito**
+   (`inventory` em `passive.py`/`saquear.py`; sondagem segue por autorização por ativo).
 2. Importar documentação de APIs com proveniência e separado declarado/observado.
 3. Integrar aplicativos móveis quando houver essa superfície no programa.
 4. Acrescentar transportes de eventos e matriz de fluxos/estados.

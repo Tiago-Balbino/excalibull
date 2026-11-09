@@ -4,6 +4,12 @@
 Junta subdomínios/hosts de várias fontes que NÃO tocam o alvo, dedupe, filtra por
 escopo, sinaliza não-produção, e compara com as observações do staging local (cobertura parcial) pra imprimir só o DELTA novo. Alimenta o `achar o x` sem recibo.
 
+A saída `--json` traz `inventory`: um item por ativo no escopo (prod E não-prod
+preservados), com `environment` (rótulo provável pelo nome), `sources`
+(proveniência agregada), `in_scope`, `new` (ausente no staging local; None sem
+`--diff-program`) e `probe_authorization: pending-per-asset`. Nenhum item autoriza
+tráfego: sondar qualquer URL exige `hive_get_context` ao vivo para o ativo exato.
+
 Fontes sem chave: crt.sh, AlienVault OTX, HackerTarget, urlscan.io, Wayback/CDX.
 Com chave (env, opcional): VirusTotal (VT_API_KEY), SecurityTrails (STRAILS_API_KEY),
 Shodan (SHODAN_API_KEY). Ausência de chave = fonte pulada (nunca hardcode).
@@ -27,6 +33,27 @@ UA = DEFAULT_UA
 NONPROD = re.compile(r'(^|[.\-])(staging|stage|dev|development|test|testing|qa|uat|sandbox|'
                      r'internal|preview|canary|demo|sepolia|devnet|testnet|e2e|local)([.\-]|$)', re.I)
 HOSTRE = re.compile(r'^(?:[a-z0-9](?:[a-z0-9\-]{0,62})\.)+[a-z]{2,}$')
+
+# Sinônimos → rótulo canônico de ambiente. Só sinaliza ambiente provável pelo nome;
+# não é prova de função real nem autoriza sondar o ativo.
+ENV_CANON = {
+    "stage": "staging", "staging": "staging",
+    "dev": "dev", "development": "dev", "devnet": "dev",
+    "test": "test", "testing": "test", "e2e": "test",
+    "qa": "qa", "uat": "uat", "sandbox": "sandbox", "internal": "internal",
+    "preview": "preview", "canary": "canary", "demo": "demo",
+    "sepolia": "testnet", "testnet": "testnet", "local": "local",
+}
+
+
+def classify_env(host):
+    """Rótulo de ambiente provável pelo nome do host; 'prod' quando nenhum marcador casa.
+
+    Heurística sobre o hostname, não observação de comportamento. Preserva o
+    ambiente no inventário; a decisão de sondar continua por ativo, ao vivo.
+    """
+    m = NONPROD.search(host or "")
+    return ENV_CANON.get(m.group(2).lower(), m.group(2).lower()) if m else "prod"
 
 # Cache entre runs por (fonte, domínio). .hive/ é gitignored (efêmero).
 CACHE_DIR = Path(_TOOLS_DIR).parent / ".hive" / "passive-cache"
@@ -272,6 +299,7 @@ def main():
             tasks.append((name, fn, d, "urls"))
 
     all_hosts, all_urls, results = set(), set(), []
+    host_sources = {}  # host -> {fontes que o reportaram}; proveniência por ativo
     with _cf.ThreadPoolExecutor(max_workers=max(1, a.workers)) as ex:
         futs = [ex.submit(_run_source, name, fn, d, kind, a.cache_ttl)
                 for (name, fn, d, kind) in tasks]
@@ -279,6 +307,8 @@ def main():
             name, d, hosts, urls, status = fut.result()
             all_hosts |= hosts
             all_urls |= urls
+            for h in hosts:
+                host_sources.setdefault(h, set()).add(name)
             results.append((d, name, len(hosts), len(urls), status))
 
     # ordena p/ saída determinística (paralelismo embaralha a ordem de chegada)
@@ -291,7 +321,7 @@ def main():
     nonprod = sorted(h for h in scoped if NONPROD.search(h))
 
     # calcula delta vs staging local (sem alegar novidade no Hive)
-    new_prod, new_nonprod, known_n = None, None, None
+    new_prod, new_nonprod, known_n, known = None, None, None, None
     if a.diff_program and a.data_dir:
         known, st = known_from_staging(a.diff_program, a.data_dir)
         known_n = len(known)
@@ -299,6 +329,20 @@ def main():
         new_nonprod = [h for h in nonprod if h not in known]
 
     scoped_urls = sorted(u for u in all_urls if any(d in u for d in a.domains))
+
+    # Inventário por ativo: preserva prod E não-prod com ambiente, fontes e escopo.
+    # `new` = ausente no staging local (None sem --diff-program); não é novidade no Hive.
+    # Nenhum ativo aqui é autorizado a sondar: cada URL exige hive_get_context ao vivo.
+    known_set = known
+    inventory = [{
+        "host": h,
+        "environment": classify_env(h),
+        "prod": not NONPROD.search(h),
+        "sources": sorted(host_sources.get(h, [])),
+        "in_scope": True,
+        "new": (h not in known_set) if known_set is not None else None,
+        "probe_authorization": "pending-per-asset",
+    } for h in sorted(scoped)]
 
     # --- saída JSON (consumida pelo saquear.py) ---
     if a.json:
@@ -310,6 +354,7 @@ def main():
             "delta_nonprod": new_nonprod,
             "known_in_staging": known_n,
             "baseline_coverage": "local-only",
+            "inventory": inventory,          # prod+não-prod preservados; sondar exige autz por ativo
             "urls": scoped_urls,
             "sources": [{"domain": d, "source": n, "hosts": nh, "urls": nu, "status": st}
                         for (d, n, nh, nu, st) in sorted(results)],
