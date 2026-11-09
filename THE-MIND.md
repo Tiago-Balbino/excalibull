@@ -111,6 +111,7 @@ alta. A coluna **rules/** diz o que carregar junto.
 | Caminhos esgotados, quero inferir outro rumo | `inventar/descobrir a roda <program>` | `chain-table` |
 | Recon chegou, hora de caçar | `modo hunter` | `mistakes`, `techniques`, `waf-bypass`, `vendor-fingerprints` |
 | Achei um candidato a bug | `protocolo contra prova` | `never-submit`, `mistakes` |
+| Tenho uma hipótese e evidências para executar em segundo plano e aguardar | `protocolo execução pública` → Carrasco local | regras da classe + `never-submit` |
 | Achado confirmado: ver nível/recompensa e tentar subir | `protocolo escada de jacó` → `protocolo report` | `chain-table`, `identities` |
 | WAF barrando payload | `modo hunter` + escada | `waf-bypass`, `payloads` |
 | Mudança de rumo/estratégia | `code 10` (registra aqui no log) | — |

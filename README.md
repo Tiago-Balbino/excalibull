@@ -88,6 +88,22 @@ python3 tools/hive_gateway.py capabilities
 
 ## Comandos principais
 
+O **Carrasco** executa localmente hipóteses delimitadas e vive neste mesmo
+repositório GitHub. O **protocolo execução pública** entrega hipótese, plano e
+referências de evidência em segundo plano e aguarda o resultado pelo ID:
+
+```sh
+python3 tools/carrasco.py validate .hive/carrasco-plan.json
+python3 tools/carrasco.py submit .hive/carrasco-plan.json
+python3 tools/carrasco.py wait <job_id> --seconds 30
+```
+
+O piloto suporta leitura entre duas contas próprias, com seis GETs, controles,
+repetição e leitura de volta. Requer plano/política revisados e autorização do
+Mind ao vivo; `confirmed` ainda exige revisão humana. Credenciais e dados de
+execução ficam locais, fora do Git. [Uso e resultados](docs/CARRASCO.md) ·
+[Plano e integração dos produtos Hive](docs/PLANO-CARRASCO.md).
+
 | Código | Ação |
 |---|---|
 | `code 3` | Auxiliar de casa nova; prepara ficha local, sem aprovar escopo ou publicar. |

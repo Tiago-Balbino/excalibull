@@ -107,6 +107,38 @@ arsenal transversais. Estimativa de recompensa não é pagamento recebido.
 
 ## Protocolos
 
+### `protocolo execução pública` — entregar hipótese ao Carrasco e aguardar
+
+Ativação: **"execução pública <hipótese>"** ou **"execução publica <hipótese>"**.
+Executa o plano local no Carrasco deste repositório; o nome não torna evidências
+públicas nem altera classificação/permissões do Hive.
+
+1. Usar hunter/postura de lança, `program_id` explícito e histórico/regras do Mind.
+   Receber hipótese e evidências/referências; preservar fatos, suposições e lacunas.
+2. Preparar plano do perfil suportado em `.hive/`: contas próprias, objetos
+   privados, URLs, marcadores sintéticos, JSON Pointer, revisão aprovada e limites.
+   Pré-condição ausente retorna pendência; não inventar sessão, objeto ou evidência.
+3. `python3 tools/carrasco.py validate <plano>`; depois `submit <plano>`.
+   Registrar o `job_id` retornado. Credenciais somente no ambiente local; o worker
+   herda aliases de sessões, consulta histórico e exige contexto autorizado para
+   cada URL antes de cada requisição. Atlas fornece sugestões, nunca autorização.
+4. **Aguardar a resposta:** chamar `wait <job_id> --seconds 30` e consultar o mesmo
+   job até conclusão, comunicando progresso. Timeout não encerra o protocolo e não
+   dispara nova execução. Interrupção/worker ausente exige inspecionar journal e
+   informar pendência; não reenviar testes automaticamente.
+5. Ler resultado, controles, repetição, leitura de volta e referências. `confirmed`
+   confirma o experimento delimitado; aplicar `contra prova` para impacto,
+   legitimidade, duplicidade e elegibilidade. Outros estados preservam seus limites.
+6. O worker prepara contribuição na outbox. Se falhar, recuperar com `stage`
+   usando o plano original e resultado. Publicar positivos e negativos com
+   `hive_outbox.py publish`, exigir fila idle/read-back e Selo; staged não é publicado.
+7. Responder ao operador com ID, estado, evidências, limites/custo disponível,
+   revisão humana pendente e situação real da publicação.
+
+MVP: somente `cross-account-read`, seis GETs no máximo, duas contas próprias;
+sem geração autônoma de planos por IA. Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
+Evolução: [docs/PLANO-CARRASCO.md](docs/PLANO-CARRASCO.md).
+
 Exibir o fluxo selecionado, o estágio atual e resultados/pendências. Todo recon
 fecha com nota focada na outbox, entrega a writer, ingestão, idle e read-back. Protocolos
 investigativos seguem a postura vigente e as regras do programa.

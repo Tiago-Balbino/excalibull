@@ -57,6 +57,9 @@ pentest-agents ficaram de fora por escopo. Ordem por valor pro fluxo:
 - [ ] **Decisão consciente (NÃO trazer, salvo mudança de filosofia):** os 50 subagents +
   slash commands + `/autopilot` autônomo. Divergem do modelo single-agent/deliberado do sword.
   Registrar como escolha, não esquecimento.
+  Revisão: Carrasco introduz executor local delimitado de hipóteses, com protocolo
+  execução pública e jobs em segundo plano. Não implica adoção dos 50 subagents.
+  Implementação e etapas restantes em `docs/PLANO-CARRASCO.md`.
 
 ## Ideias / backlog
 
