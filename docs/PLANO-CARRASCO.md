@@ -75,8 +75,20 @@ mede precisão, custo por candidato validado e testes repetidos evitados.
 
 ## Etapa 4 — novas capacidades
 
+**Em andamento.** O executor agora tem um **registro de perfis**: cada perfil declara
+schema, oráculos (passos/controles) e vereditos próprios, e `limits.requests` deve
+bater com a contagem fixa do perfil. Perfis somente leitura (GET) implementados e
+testados offline:
+
+- `cross-account-read` (IDOR de leitura entre duas contas; 6 passos).
+- `unauthenticated-read` (objeto privado próprio legível sem credencial; 4 passos:
+  controle do dono → dois acessos anônimos → leitura de volta do dono).
+
+Pendente nesta etapa:
+
 - Novos perfis para papéis e fluxos com várias etapas, cada um com oráculos e
-  testes próprios. Escrita exige política de efeitos, leitura de volta e limpeza.
+  testes próprios. Escrita exige política de efeitos, leitura de volta e limpeza
+  (o transporte atual é GET-only; nenhum perfil de escrita existe ainda).
 - Integração Burp após homologação dos contratos de captura/contexto; nenhuma
   expectativa de replay produtivo a partir da prova sintética atual.
 - Fila com prioridades, leases, cancelamento e retomada; concorrência somente

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Carrasco: executor local de planos cross-account-read/v1 (stdlib)."""
+"""Carrasco: executor local de planos de hipótese (stdlib), com registro de perfis.
+
+Cada perfil declara seu schema, seus oráculos (sequência de passos e controles) e
+seus vereditos. Perfis atuais (somente leitura, GET): `cross-account-read` (IDOR de
+leitura entre duas contas) e `unauthenticated-read` (objeto privado legível sem
+autenticação). Perfis de escrita exigem política de efeitos, leitura de volta e
+limpeza antes de existirem; não há método não-GET neste transporte.
+"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +33,7 @@ from netcommon import RateLimiter
 
 ROOT = Path(__file__).resolve().parents[1]
 DENIED = {401, 403, 404}
+COMMON_KEYS = {"version", "id", "program_id", "profile", "hypothesis", "evidence_refs", "policy", "limits"}
 
 
 class Blocked(ValueError):
@@ -41,9 +49,135 @@ def keys(value, expected):
         raise ValueError("campos ausentes/desconhecidos no plano")
 
 
+def env_name(name):
+    if not isinstance(name, str) or not re.fullmatch(r"CARRASCO_[A-Z][A-Z0-9_]{0,80}", name):
+        raise ValueError("alias de ambiente CARRASCO_* necessário")
+
+
+def _validate_assertion(plan):
+    keys(plan["assertion"], {"json_pointer"})
+    pointer = plan["assertion"]["json_pointer"]
+    if not isinstance(pointer, str) or not pointer.startswith("/") or len(pointer) > 256 or re.search(r"~(?![01])", pointer):
+        raise ValueError("JSON Pointer RFC 6901 necessário")
+
+
+def _validate_account(account):
+    """Conta de teste própria: URL HTTPS sem query/credencial, alias de ambiente e marcador sintético."""
+    keys(account, {"url", "headers_env", "marker"})
+    parsed = urlsplit(account["url"])
+    # Queries podem conter tokens; o piloto exige identificadores no path.
+    if parsed.scheme != "https" or parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise ValueError("URLs HTTPS sem query, fragmento ou credenciais necessárias")
+    normalize_asset({"type": "url_prefix", "value": account["url"]})
+    env_name(account["headers_env"])
+    if not isinstance(account["marker"], str) or not re.fullmatch(r"carrasco-[a-zA-Z0-9_-]{16,80}", account["marker"]):
+        raise ValueError("use marcador sintético carrasco- seguido de 16 a 80 caracteres")
+    return parsed
+
+
+class CrossAccountRead:
+    """IDOR de leitura: a sessão A lê o marcador privado do objeto da conta B."""
+    name = "cross-account-read"
+    VERSION = 1
+    REQUESTS = 6
+    SUBJECT_KEYS = {"accounts", "assertion"}
+
+    def validate_subject(self, plan):
+        accounts = plan["accounts"]
+        keys(accounts, {"a", "b"})
+        origins = set()
+        for account in accounts.values():
+            parsed = _validate_account(account)
+            origins.add((parsed.hostname, parsed.port or 443))
+        if (len(origins) != 1 or accounts["a"]["url"] == accounts["b"]["url"]
+                or accounts["a"]["marker"] == accounts["b"]["marker"]
+                or accounts["a"]["headers_env"] == accounts["b"]["headers_env"]):
+            raise ValueError("contas exigem URLs, marcadores e aliases diferentes, no mesmo origin")
+        _validate_assertion(plan)
+
+    def credentials(self, plan):
+        return {k: plan["accounts"][k]["headers_env"] for k in ("a", "b")}
+
+    def check_credentials(self, credentials):
+        if credentials["a"] == credentials["b"]:
+            raise ValueError("credenciais das contas devem ser diferentes")
+
+    def objects(self, plan):
+        return {k: plan["accounts"][k] for k in ("a", "b")}
+
+    def asset_urls(self, plan):
+        return [plan["accounts"][k]["url"] for k in ("a", "b")]
+
+    def run(self, plan, engine):
+        observe, state = engine.observe, engine.state
+        if observe("control_a", "a", "a") != (200, True) or observe("control_b", "b", "b") != (200, True):
+            state.update(status="inconclusive", reason="owner_control_failed")
+        elif observe("anonymous_b", "anonymous", "b")[0] not in DENIED:
+            state.update(status="inconclusive", reason="privacy_control_failed")
+        else:
+            first = observe("cross_a_b", "a", "b")
+            repeat = observe("repeat_a_b", "a", "b")
+            readback = observe("readback_b", "b", "b")
+            if readback != (200, True):
+                state.update(status="inconclusive", reason="readback_failed")
+            elif first == repeat == (200, True):
+                state.update(status="confirmed", reason="private_test_marker_read_cross_account_twice")
+            elif first[0] in {403, 404} and repeat[0] in {403, 404}:
+                state.update(status="refuted", reason="cross_account_denied_in_tested_conditions")
+            else:
+                state.update(status="inconclusive", reason="ambiguous_cross_account_response")
+
+
+class UnauthenticatedRead:
+    """Objeto privado próprio legível sem credencial alguma (autenticação ausente)."""
+    name = "unauthenticated-read"
+    VERSION = 1
+    REQUESTS = 4
+    SUBJECT_KEYS = {"owner", "assertion"}
+
+    def validate_subject(self, plan):
+        _validate_account(plan["owner"])
+        _validate_assertion(plan)
+
+    def credentials(self, plan):
+        return {"owner": plan["owner"]["headers_env"]}
+
+    def check_credentials(self, credentials):
+        pass  # Uma única conta própria; não há par para comparar.
+
+    def objects(self, plan):
+        return {"owner": plan["owner"]}
+
+    def asset_urls(self, plan):
+        return [plan["owner"]["url"]]
+
+    def run(self, plan, engine):
+        observe, state = engine.observe, engine.state
+        if observe("control_owner", "owner", "owner") != (200, True):
+            state.update(status="inconclusive", reason="owner_control_failed")
+        else:
+            first = observe("anonymous_1", "anonymous", "owner")
+            repeat = observe("anonymous_2", "anonymous", "owner")
+            readback = observe("readback_owner", "owner", "owner")
+            if readback != (200, True):
+                state.update(status="inconclusive", reason="readback_failed")
+            elif first == repeat == (200, True):
+                state.update(status="confirmed", reason="private_object_readable_unauthenticated_twice")
+            elif first[0] in DENIED and repeat[0] in DENIED:
+                state.update(status="refuted", reason="unauthenticated_denied_in_tested_conditions")
+            else:
+                state.update(status="inconclusive", reason="ambiguous_unauthenticated_response")
+
+
+PROFILES = {profile.name: profile for profile in (CrossAccountRead(), UnauthenticatedRead())}
+
+
 def validate(plan):
-    keys(plan, {"version", "id", "program_id", "profile", "hypothesis", "evidence_refs", "policy", "limits", "accounts", "assertion"})
-    if type(plan["version"]) is not int or plan["version"] != 1 or plan["profile"] != "cross-account-read":
+    if not isinstance(plan, dict) or plan.get("profile") not in PROFILES:
+        raise ValueError("versão/perfil não suportado")
+    profile = PROFILES[plan["profile"]]
+    keys(plan, COMMON_KEYS | profile.SUBJECT_KEYS)
+    if type(plan["version"]) is not int or plan["version"] != profile.VERSION:
         raise ValueError("versão/perfil não suportado")
     identifier(plan["id"])
     identifier(plan["program_id"])
@@ -62,38 +196,14 @@ def validate(plan):
     env_name(policy["required_headers_env"])
     limits = plan["limits"]
     keys(limits, {"requests", "seconds", "timeout", "rate", "response_bytes"})
-    for name, lo, hi in (("requests", 6, 6), ("seconds", 1, 300), ("timeout", 1, 30), ("response_bytes", 1, 1048576)):
+    for name, lo, hi in (("requests", profile.REQUESTS, profile.REQUESTS), ("seconds", 1, 300), ("timeout", 1, 30), ("response_bytes", 1, 1048576)):
         if type(limits[name]) is not int or not lo <= limits[name] <= hi:
             raise ValueError("limite inteiro inválido: " + name)
     rate = limits["rate"]
     if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or not 0.1 <= rate <= 2:
         raise ValueError("rate deve estar entre 0.1 e 2 req/s, respeitando o programa")
-    accounts = plan["accounts"]
-    keys(accounts, {"a", "b"})
-    origins = set()
-    for account in accounts.values():
-        keys(account, {"url", "headers_env", "marker"})
-        parsed = urlsplit(account["url"])
-        # Queries podem conter tokens; o piloto exige identificadores no path.
-        if parsed.scheme != "https" or parsed.query or parsed.fragment or parsed.username or parsed.password:
-            raise ValueError("URLs HTTPS sem query, fragmento ou credenciais necessárias")
-        normalize_asset({"type": "url_prefix", "value": account["url"]})
-        origins.add((parsed.hostname, parsed.port or 443))
-        env_name(account["headers_env"])
-        if not isinstance(account["marker"], str) or not re.fullmatch(r"carrasco-[a-zA-Z0-9_-]{16,80}", account["marker"]):
-            raise ValueError("use marcador sintético carrasco- seguido de 16 a 80 caracteres")
-    if len(origins) != 1 or accounts["a"]["url"] == accounts["b"]["url"] or accounts["a"]["marker"] == accounts["b"]["marker"] or accounts["a"]["headers_env"] == accounts["b"]["headers_env"]:
-        raise ValueError("contas exigem URLs, marcadores e aliases diferentes, no mesmo origin")
-    keys(plan["assertion"], {"json_pointer"})
-    pointer = plan["assertion"]["json_pointer"]
-    if not isinstance(pointer, str) or not pointer.startswith("/") or len(pointer) > 256 or re.search(r"~(?![01])", pointer):
-        raise ValueError("JSON Pointer RFC 6901 necessário")
+    profile.validate_subject(plan)
     return plan
-
-
-def env_name(name):
-    if not isinstance(name, str) or not re.fullmatch(r"CARRASCO_[A-Z][A-Z0-9_]{0,80}", name):
-        raise ValueError("alias de ambiente CARRASCO_* necessário")
 
 
 def headers_from_env(name, *, authenticated):
@@ -178,72 +288,71 @@ class MindGate:
 
 def new_state(plan):
     return {"version": 1, "run_id": uuid.uuid4().hex, "program_id": plan["program_id"],
-            "hypothesis_id": plan["id"], "plan_sha256": digest(plan), "started_at": now(),
+            "hypothesis_id": plan["id"], "profile": plan["profile"], "plan_sha256": digest(plan), "started_at": now(),
             "status": "running", "reason": "in_progress", "observations": [],
             "evidence_refs": plan["evidence_refs"],
             "publication": "pending", "human_review_required": True, "llm_calls": 0}
 
 
-def execute(plan, gate, transport, save):
-    """Dependências injetáveis somente pela API Python para testes offline."""
-    validate(plan)
-    common = headers_from_env(plan["policy"]["required_headers_env"], authenticated=False)
-    credentials = {k: headers_from_env(v["headers_env"], authenticated=True) for k, v in plan["accounts"].items()}
-    if any(set(common) & set(h) for h in credentials.values()) or set(common) & {"accept", "accept-encoding"}:
-        raise ValueError("headers obrigatórios não podem ser sobrescritos")
-    if credentials["a"] == credentials["b"]:
-        raise ValueError("credenciais das contas devem ser diferentes")
-    limits, accounts = plan["limits"], plan["accounts"]
-    started = time.monotonic()
-    limiter = RateLimiter(limits["rate"])
-    state = new_state(plan)
-    save(state)
+class Engine:
+    """Oráculo compartilhado: uma observação = escopo ao vivo + GET + match de marcador.
 
-    def observe(label, actor, owner):
-        limiter.wait()
-        if len(state["observations"]) >= limits["requests"] or time.monotonic() - started >= limits["seconds"]:
+    `observe` jamais repete tráfego por conta própria; o perfil decide a sequência
+    de passos e os vereditos. Orçamento, rate e gate do Mind são checados aqui.
+    """
+    def __init__(self, plan, gate, transport, save, common, credentials, objects, limiter, limits, started, state):
+        self.plan, self.gate, self.transport, self.save = plan, gate, transport, save
+        self.common, self.credentials, self.objects = common, credentials, objects
+        self.limiter, self.limits, self.started, self.state = limiter, limits, started, state
+
+    def observe(self, label, actor, obj_key):
+        self.limiter.wait()
+        limits = self.limits
+        if len(self.state["observations"]) >= limits["requests"] or time.monotonic() - self.started >= limits["seconds"]:
             raise Blocked("budget_exhausted")
-        revision = gate.check(accounts[owner]["url"])
-        remaining = limits["seconds"] - (time.monotonic() - started)
+        target = self.objects[obj_key]
+        revision = self.gate.check(target["url"])
+        remaining = limits["seconds"] - (time.monotonic() - self.started)
         if remaining <= 0:
             raise Blocked("budget_exhausted")
-        event = {"step": label, "actor": actor, "object": owner, "at": now(),
+        event = {"step": label, "actor": actor, "object": obj_key, "at": now(),
                  "scope_revision": revision, "state": "attempted"}
-        state["observations"].append(event)
-        save(state)
-        status, body = transport.get(accounts[owner]["url"], {**common, **credentials.get(actor, {})},
-                                     min(limits["timeout"], remaining), limits["response_bytes"])
+        self.state["observations"].append(event)
+        self.save(self.state)
+        status, body = self.transport.get(target["url"], {**self.common, **self.credentials.get(actor, {})},
+                                          min(limits["timeout"], remaining), limits["response_bytes"])
         match = False
         try:
-            match = pointer_value(body, plan["assertion"]["json_pointer"]) == accounts[owner]["marker"]
+            match = pointer_value(body, self.plan["assertion"]["json_pointer"]) == target["marker"]
         except (ValueError, KeyError, TypeError, IndexError, UnicodeError, RecursionError):
             pass
         event.update(state="received", http_status=status, marker_match=match,
                      response_bytes=len(body), response_sha256=hashlib.sha256(body).hexdigest())
-        save(state)
-        if time.monotonic() - started > limits["seconds"]:
+        self.save(self.state)
+        if time.monotonic() - self.started > limits["seconds"]:
             raise Blocked("budget_exhausted")
         if status == 429 or status >= 500:
             raise Blocked("target_unavailable_or_rate_limited")
         return status, match
 
+
+def execute(plan, gate, transport, save):
+    """Dependências injetáveis somente pela API Python para testes offline."""
+    validate(plan)
+    profile = PROFILES[plan["profile"]]
+    common = headers_from_env(plan["policy"]["required_headers_env"], authenticated=False)
+    credentials = {key: headers_from_env(env, authenticated=True) for key, env in profile.credentials(plan).items()}
+    if any(set(common) & set(h) for h in credentials.values()) or set(common) & {"accept", "accept-encoding"}:
+        raise ValueError("headers obrigatórios não podem ser sobrescritos")
+    profile.check_credentials(credentials)
+    limits = plan["limits"]
+    started = time.monotonic()
+    limiter = RateLimiter(limits["rate"])
+    state = new_state(plan)
+    save(state)
+    engine = Engine(plan, gate, transport, save, common, credentials, profile.objects(plan), limiter, limits, started, state)
     try:
-        if observe("control_a", "a", "a") != (200, True) or observe("control_b", "b", "b") != (200, True):
-            state.update(status="inconclusive", reason="owner_control_failed")
-        elif observe("anonymous_b", "anonymous", "b")[0] not in DENIED:
-            state.update(status="inconclusive", reason="privacy_control_failed")
-        else:
-            first = observe("cross_a_b", "a", "b")
-            repeat = observe("repeat_a_b", "a", "b")
-            readback = observe("readback_b", "b", "b")
-            if readback != (200, True):
-                state.update(status="inconclusive", reason="readback_failed")
-            elif first == repeat == (200, True):
-                state.update(status="confirmed", reason="private_test_marker_read_cross_account_twice")
-            elif first[0] in {403, 404} and repeat[0] in {403, 404}:
-                state.update(status="refuted", reason="cross_account_denied_in_tested_conditions")
-            else:
-                state.update(status="inconclusive", reason="ambiguous_cross_account_response")
+        profile.run(plan, engine)
     except Blocked as exc:
         state.update(status="blocked", reason=str(exc))
     except HiveError:
@@ -256,11 +365,12 @@ def execute(plan, gate, transport, save):
 
 
 def stage(plan, state):
+    profile = PROFILES[plan["profile"]]
     mapping = {"confirmed": "confirmed", "refuted": "discarded", "blocked": "inconclusive", "inconclusive": "inconclusive", "failed": "inconclusive"}
     # Somente aliases/metadados calculados: hipótese, URLs, headers, marcadores e bodies não entram na nota.
     body = "Carrasco: experimento local; revisão humana de elegibilidade/impacto pendente.\n\n" + json.dumps(state, ensure_ascii=False, indent=2)
     return prepare(plan["program_id"], "carrasco-" + state["run_id"], body,
-                   assets=[a["url"] for a in plan["accounts"].values()], source="carrasco",
+                   assets=profile.asset_urls(plan), source="carrasco",
                    result=mapping[state["status"]], tags=["carrasco"])
 
 
@@ -277,10 +387,11 @@ def job_directory(job):
 def submit(plan):
     validate(plan)
     identity()
+    profile = PROFILES[plan["profile"]]
     # Credenciais ficam somente no ambiente herdado; nunca no snapshot do plano.
     headers_from_env(plan["policy"]["required_headers_env"], authenticated=False)
-    for account in plan["accounts"].values():
-        headers_from_env(account["headers_env"], authenticated=True)
+    for env in profile.credentials(plan).values():
+        headers_from_env(env, authenticated=True)
     job = uuid.uuid4().hex
     directory = job_directory(job)
     directory.mkdir(parents=True, mode=0o700)
@@ -340,7 +451,7 @@ def main(argv=None):
             return 0 if result["finished"] else 1
         plan = validate(json.loads(args.plan.read_text()))
         if args.command == "validate":
-            print(json.dumps({"valid": True, "profile": plan["profile"], "requests_max": 6, "traffic_sent": False}))
+            print(json.dumps({"valid": True, "profile": plan["profile"], "requests_max": PROFILES[plan["profile"]].REQUESTS, "traffic_sent": False}))
             return 0
         if args.command == "submit":
             print(json.dumps({"job_id": submit(plan), "status": "queued", "background": True}))

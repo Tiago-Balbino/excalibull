@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "document-requires-auth",
+  "program_id": "example",
+  "profile": "unauthenticated-read",
+  "hypothesis": "O documento privado de teste é legível sem nenhuma credencial.",
+  "evidence_refs": ["owner-control", "private-object-reviewed"],
+  "policy": {
+    "reviewed": true,
+    "automation_allowed": true,
+    "owned_test_accounts": true,
+    "private_objects": true,
+    "scope_revision": "REPLACE_WITH_APPROVED_MIND_REVISION",
+    "required_headers_env": "CARRASCO_REQUIRED_HEADERS"
+  },
+  "limits": {
+    "requests": 4,
+    "seconds": 60,
+    "timeout": 10,
+    "rate": 1,
+    "response_bytes": 65536
+  },
+  "owner": {
+    "url": "https://app.example.invalid/api/documents/test-owner",
+    "headers_env": "CARRASCO_ACCOUNT_A",
+    "marker": "carrasco-oooooooo11111111"
+  },
+  "assertion": {"json_pointer": "/content"}
+}
