@@ -84,11 +84,23 @@ testados offline:
 - `unauthenticated-read` (objeto privado próprio legível sem credencial; 4 passos:
   controle do dono → dois acessos anônimos → leitura de volta do dono).
 
+Perfil de escrita implementado e testado offline:
+
+- `cross-account-write` (IDOR de escrita; 5 passos: controle do dono → escrita do
+  atacante → leitura de volta → **limpeza obrigatória do dono** → verificação).
+  Cumpre o requisito "escrita exige política de efeitos, leitura de volta e limpeza":
+  `policy.effects` revisada; corpos de escrita/limpeza autorados pelo operador e
+  validados contra o marcador no JSON Pointer (método restrito a PATCH/PUT); a limpeza
+  roda mesmo sob bloqueio/erro e fora do orçamento de ataque; restauração não
+  confirmada vira `failed` + `manual_restoration_required`. O transporte ganhou
+  `send` (PATCH/PUT) sem redirect/proxy/cookie.
+
 Pendente nesta etapa:
 
-- Novos perfis para papéis e fluxos com várias etapas, cada um com oráculos e
-  testes próprios. Escrita exige política de efeitos, leitura de volta e limpeza
-  (o transporte atual é GET-only; nenhum perfil de escrita existe ainda).
+- Perfis para papéis e fluxos com várias etapas (escalonamento de privilégio, troca
+  de ordem de etapas), cada um com oráculos e testes próprios.
+- Permissão de escrita por método no contrato do Mind (hoje o contexto autoriza
+  escopo por URL, não por método; o operador cobre isso na política de efeitos).
 - Integração Burp após homologação dos contratos de captura/contexto; nenhuma
   expectativa de replay produtivo a partir da prova sintética atual.
 - Fila com prioridades, leases, cancelamento e retomada; concorrência somente

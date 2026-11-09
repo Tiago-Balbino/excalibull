@@ -7,18 +7,41 @@ exemplos são versionados; planos reais, credenciais e journals ficam fora do Gi
 ## Perfis disponíveis
 
 Cada perfil é um oráculo próprio: define o schema do plano, a sequência de passos
-(controles, teste e leitura de volta) e os vereditos. Ambos são **somente leitura
-(GET)**; não há método de escrita neste transporte.
+(controles, teste e leitura de volta) e os vereditos. `cross-account-read` e
+`unauthenticated-read` são **somente leitura (GET)**; `cross-account-write` escreve
+(PATCH/PUT) sob regras adicionais.
 
 | Perfil | Hipótese testada | Objetos/contas | Requests | Exemplo |
 |---|---|---|---|---|
 | `cross-account-read` | A sessão A lê o objeto privado da conta B (IDOR de leitura) | 2 contas próprias, 2 objetos | 6 | `examples/carrasco/cross-account-read.json` |
 | `unauthenticated-read` | Objeto privado legível sem credencial alguma (autenticação ausente) | 1 conta própria, 1 objeto | 4 | `examples/carrasco/unauthenticated-read.json` |
+| `cross-account-write` | A sessão A altera o objeto privado da conta B (IDOR de escrita) | 2 contas próprias, 1 objeto | 5 | `examples/carrasco/cross-account-write.json` |
 
 O campo `profile` do plano escolhe o oráculo; `limits.requests` deve bater com a
-contagem fixa do perfil. Perfis de **escrita** (alterar objeto de B, trocar ordem de
-etapas, escalonar papel) exigem política de efeitos, leitura de volta e limpeza, e
-ainda não existem — não envie planos de escrita.
+contagem fixa do perfil.
+
+### Perfil de escrita (`cross-account-write`)
+
+A escrita cruza uma fronteira de risco, então exige três coisas, todas verificadas:
+
+- **Política de efeitos** (`policy.effects`): declaração revisada de que a escrita é
+  reversível, idempotente, só em objetos próprios e sem dados de terceiros. Sem ela,
+  o plano não valida.
+- **Corpos autorados** (`write.body`, `cleanup.body`): JSON sintético **que você
+  escreve e revisa**. O worker valida que cada corpo posiciona exatamente o marcador
+  esperado no JSON Pointer e envia **apenas isso** — nunca inventa o corpo. Método
+  restrito a `PATCH`/`PUT`.
+- **Limpeza obrigatória**: depois do teste, o **dono** reescreve o objeto de volta ao
+  marcador original e o worker **verifica** a restauração. A limpeza roda mesmo se o
+  ataque for bloqueado no meio (429/5xx/escopo) e está fora do orçamento de ataque.
+  Se a restauração não puder ser confirmada, o resultado é `failed` com
+  `manual_restoration_required: true` — **você precisa restaurar o objeto à mão**.
+
+Sequência (5 passos): controle do dono → escrita do atacante → leitura de volta do
+dono → **limpeza do dono** → **verificação**. Limitação conhecida: o contexto do Mind
+autoriza escopo **por URL**, não por método; permissão de escrita no ativo é coberta
+pela sua política de efeitos e pela revisão das regras do programa, não inferida pelo
+worker.
 
 ## Preparar o experimento
 
@@ -38,10 +61,12 @@ ainda não existem — não envie planos de escrita.
    Se manual-only ou automação proibida, não execute este perfil. Respeite o menor
    limite do programa, mesmo que o validador permita rate maior.
 5. Configure `HIVE_HANDLE`, `HIVE_TEAM_TAG` e faça `hive login`/`hive doctor`.
-   Configure `CARRASCO_ACCOUNT_A` (e `CARRASCO_ACCOUNT_B` no `cross-account-read`)
-   como objetos JSON de headers no ambiente privado, por exemplo `Authorization` ou
-   `Cookie`, com valores de sessões distintas. O `unauthenticated-read` usa só a conta
-   do dono (`CARRASCO_ACCOUNT_A`); os passos anônimos não recebem credencial alguma.
+   Configure as credenciais como objetos JSON de headers no ambiente privado, por
+   exemplo `Authorization` ou `Cookie`, com valores de sessões distintas. Por perfil:
+   `cross-account-read` usa `CARRASCO_ACCOUNT_A` e `CARRASCO_ACCOUNT_B`;
+   `unauthenticated-read` usa só a do dono (`CARRASCO_ACCOUNT_A`) e os passos anônimos
+   não recebem credencial; `cross-account-write` usa a do atacante (`CARRASCO_ACCOUNT_A`)
+   e a do dono (`CARRASCO_ACCOUNT_B`, que faz controle, leitura de volta e limpeza).
    `CARRASCO_REQUIRED_HEADERS` contém apenas headers comuns de
    identificação exigidos pelo programa, sem credenciais. Não os coloque no plano,
    no chat, no Git ou em comandos que os imprimam. O worker herda o ambiente.
@@ -84,11 +109,11 @@ python3 tools/carrasco.py run .hive/carrasco-plan.json
 
 | Estado | Interpretação |
 |---|---|
-| `confirmed` | Marcador privado lido duas vezes pelo ator não autorizado (A no `cross-account-read`; anônimo no `unauthenticated-read`), com controles e leitura de volta válidos; candidato exige revisão humana |
-| `refuted` | Duas tentativas negadas com 401/403/404; não esgota a classe nem outros fluxos |
+| `confirmed` | Leitura: marcador privado lido duas vezes pelo ator não autorizado (A ou anônimo), com controles válidos. Escrita: marcador do atacante visível na leitura de volta do dono, com escrita 2xx. Sempre exige revisão humana |
+| `refuted` | Leitura: duas tentativas negadas com 401/403/404. Escrita: escrita negada e objeto intacto na leitura de volta. Não esgota a classe nem outros fluxos |
 | `inconclusive` | Controle, conteúdo, transporte ou repetição insuficientes |
 | `blocked` | Mind/escopo/revisão/limite/429/5xx impediram continuar |
-| `failed` | Pré-condição local, worker ou armazenamento falhou |
+| `failed` | Pré-condição local, worker ou armazenamento falhou — **ou a limpeza do `cross-account-write` não foi confirmada** (`manual_restoration_required: true`: restaure o objeto à mão) |
 
 `result.json` conserva aliases, status, hash/tamanho da resposta, correspondência
 do marcador e revisão de escopo. Não conserva corpo, cookies ou headers. O plano

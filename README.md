@@ -98,11 +98,13 @@ python3 tools/carrasco.py submit .hive/carrasco-plan.json
 python3 tools/carrasco.py wait <job_id> --seconds 30
 ```
 
-Os perfis atuais são somente leitura (GET): `cross-account-read` (leitura entre
-duas contas próprias, 6 GETs) e `unauthenticated-read` (objeto privado legível sem
-credencial, 4 GETs), ambos com controles, repetição e leitura de volta. Requer
-plano/política revisados e autorização do Mind ao vivo; `confirmed` ainda exige
-revisão humana. Credenciais e dados de execução ficam locais, fora do Git. [Uso e resultados](docs/CARRASCO.md) ·
+Perfis de leitura (GET): `cross-account-read` (leitura entre duas contas próprias,
+6 GETs) e `unauthenticated-read` (objeto privado legível sem credencial, 4 GETs). Perfil
+de escrita (PATCH/PUT): `cross-account-write` (A altera objeto de B, 5 passos) com
+política de efeitos, corpos revisados, leitura de volta e **limpeza obrigatória** do
+dono — restauração não confirmada vira `failed` e pede correção manual. Todos exigem
+plano/política revisados e autorização do Mind ao vivo; `confirmed` ainda exige revisão
+humana. Credenciais e dados de execução ficam locais, fora do Git. [Uso e resultados](docs/CARRASCO.md) ·
 [Plano e integração dos produtos Hive](docs/PLANO-CARRASCO.md).
 
 | Código | Ação |

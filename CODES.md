@@ -135,9 +135,11 @@ públicas nem altera classificação/permissões do Hive.
 7. Responder ao operador com ID, estado, evidências, limites/custo disponível,
    revisão humana pendente e situação real da publicação.
 
-Perfis somente leitura (GET): `cross-account-read` (6 GETs, duas contas próprias) e
-`unauthenticated-read` (4 GETs, uma conta própria); `limits.requests` bate com o perfil.
-Sem geração autônoma de planos por IA. Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
+Perfis: leitura (GET) `cross-account-read` (6, duas contas) e `unauthenticated-read`
+(4, uma conta); escrita (PATCH/PUT) `cross-account-write` (5, duas contas), que exige
+política de efeitos, corpos revisados, leitura de volta e limpeza obrigatória do dono.
+`limits.requests` bate com o perfil. Sem geração autônoma de planos por IA.
+Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
 Evolução: [docs/PLANO-CARRASCO.md](docs/PLANO-CARRASCO.md).
 
 Exibir o fluxo selecionado, o estágio atual e resultados/pendências. Todo recon

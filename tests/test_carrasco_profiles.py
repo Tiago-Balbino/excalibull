@@ -47,10 +47,12 @@ def run(plan, **kwargs):
     return state, transport, saved
 
 
-def test_registry_lists_both_profiles():
-    assert set(c.PROFILES) == {"cross-account-read", "unauthenticated-read"}
+def test_registry_lists_all_profiles():
+    assert set(c.PROFILES) == {"cross-account-read", "unauthenticated-read", "cross-account-write"}
     assert c.PROFILES["unauthenticated-read"].REQUESTS == 4
     assert c.PROFILES["cross-account-read"].REQUESTS == 6
+    assert c.PROFILES["cross-account-write"].REQUESTS == 5
+    assert c.PROFILES["cross-account-write"].ATTACK_REQUESTS == 3
 
 
 def test_example_validates_and_records_profile(plan):

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "document-write-isolation",
+  "program_id": "example",
+  "profile": "cross-account-write",
+  "hypothesis": "A sessão A pode alterar o documento privado de teste da conta B.",
+  "evidence_refs": ["owner-b-control", "attacker-a-session", "private-write-reviewed"],
+  "policy": {
+    "reviewed": true,
+    "automation_allowed": true,
+    "owned_test_accounts": true,
+    "private_objects": true,
+    "scope_revision": "REPLACE_WITH_APPROVED_MIND_REVISION",
+    "required_headers_env": "CARRASCO_REQUIRED_HEADERS",
+    "effects": {
+      "reversible": true,
+      "idempotent_write": true,
+      "own_objects_only": true,
+      "no_third_party_data": true
+    }
+  },
+  "limits": {
+    "requests": 5,
+    "seconds": 90,
+    "timeout": 10,
+    "rate": 1,
+    "response_bytes": 65536
+  },
+  "target": {
+    "url": "https://app.example.invalid/api/documents/test-b",
+    "headers_env": "CARRASCO_ACCOUNT_B",
+    "marker": "carrasco-origbbbb22222222"
+  },
+  "attacker": {
+    "headers_env": "CARRASCO_ACCOUNT_A"
+  },
+  "write": {
+    "method": "PATCH",
+    "body": {"content": "carrasco-writeaaaa33333333"},
+    "marker": "carrasco-writeaaaa33333333"
+  },
+  "cleanup": {
+    "method": "PATCH",
+    "body": {"content": "carrasco-origbbbb22222222"}
+  },
+  "assertion": {"json_pointer": "/content"}
+}

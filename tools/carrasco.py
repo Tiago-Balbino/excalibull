@@ -40,6 +40,10 @@ class Blocked(ValueError):
     pass
 
 
+class CleanupError(Exception):
+    """A restauração obrigatória do objeto não pôde ser confirmada; intervenção humana."""
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -73,6 +77,35 @@ def _validate_account(account):
     if not isinstance(account["marker"], str) or not re.fullmatch(r"carrasco-[a-zA-Z0-9_-]{16,80}", account["marker"]):
         raise ValueError("use marcador sintético carrasco- seguido de 16 a 80 caracteres")
     return parsed
+
+
+def _marker(value):
+    return isinstance(value, str) and bool(re.fullmatch(r"carrasco-[a-zA-Z0-9_-]{16,80}", value))
+
+
+def _validate_write(spec, pointer, expected_marker, *, with_marker):
+    """Corpo de escrita autorado e revisado pelo operador: JSON sintético, limitado,
+    que posiciona exatamente o marcador esperado no JSON Pointer. O executor só envia
+    o que consegue verificar; nunca inventa o corpo. Método restrito a PATCH/PUT."""
+    keys(spec, {"method", "body", "marker"} if with_marker else {"method", "body"})
+    if spec["method"] not in {"PATCH", "PUT"}:
+        raise ValueError("método de escrita deve ser PATCH ou PUT")
+    if not isinstance(spec["body"], dict):
+        raise ValueError("corpo de escrita deve ser objeto JSON")
+    try:
+        payload = json.dumps(spec["body"], ensure_ascii=False)
+    except (TypeError, ValueError):
+        raise ValueError("corpo de escrita deve ser JSON serializável")
+    if len(payload.encode()) > 4096:
+        raise ValueError("corpo de escrita excede 4096 bytes")
+    if with_marker and not _marker(spec["marker"]):
+        raise ValueError("marcador de escrita sintético necessário")
+    try:
+        placed = pointer_value(payload.encode(), pointer)
+    except (ValueError, KeyError, TypeError, IndexError, UnicodeError, RecursionError):
+        raise ValueError("corpo de escrita deve conter o marcador no JSON Pointer")
+    if placed != expected_marker:
+        raise ValueError("corpo de escrita deve posicionar exatamente o marcador esperado")
 
 
 class CrossAccountRead:
@@ -169,7 +202,82 @@ class UnauthenticatedRead:
                 state.update(status="inconclusive", reason="ambiguous_unauthenticated_response")
 
 
-PROFILES = {profile.name: profile for profile in (CrossAccountRead(), UnauthenticatedRead())}
+class CrossAccountWrite:
+    """IDOR de escrita: a conta A altera o objeto privado de B, com restauração obrigatória.
+
+    Fronteira de escrita: exige política de efeitos revisada, leitura de volta e limpeza.
+    O corpo de escrita e o de restauração são autorados/revisados pelo operador; o worker
+    valida que posicionam exatamente os marcadores sintéticos e envia apenas isso. A limpeza
+    (restaurar o marcador original de B) é obrigatória e roda mesmo em erro/bloqueio: se não
+    for confirmada, o resultado é `failed` com `manual_restoration_required`.
+    """
+    name = "cross-account-write"
+    VERSION = 1
+    REQUESTS = 5            # controle, escrita, leitura de volta, limpeza, verificação
+    ATTACK_REQUESTS = 3     # controle/escrita/leitura; limpeza+verificação reservadas e obrigatórias
+    SUBJECT_KEYS = {"target", "attacker", "write", "cleanup", "assertion"}
+    POLICY_EXTRA = {"effects"}
+
+    def validate_subject(self, plan):
+        target = plan["target"]
+        _validate_account(target)
+        attacker = plan["attacker"]
+        keys(attacker, {"headers_env"})
+        env_name(attacker["headers_env"])
+        if attacker["headers_env"] == target["headers_env"]:
+            raise ValueError("atacante e dono exigem aliases de credenciais diferentes")
+        _validate_assertion(plan)
+        pointer = plan["assertion"]["json_pointer"]
+        write = plan["write"]
+        _validate_write(write, pointer, write.get("marker"), with_marker=True)
+        if write["marker"] == target["marker"]:
+            raise ValueError("marcador de escrita deve diferir do marcador original")
+        _validate_write(plan["cleanup"], pointer, target["marker"], with_marker=False)
+
+    def validate_effects(self, effects):
+        keys(effects, {"reversible", "idempotent_write", "own_objects_only", "no_third_party_data"})
+        if any(effects[k] is not True for k in effects):
+            raise ValueError("política de efeitos exige reversível, idempotente, objetos próprios e sem dados de terceiros")
+
+    def credentials(self, plan):
+        return {"owner": plan["target"]["headers_env"], "attacker": plan["attacker"]["headers_env"]}
+
+    def check_credentials(self, credentials):
+        if credentials["owner"] == credentials["attacker"]:
+            raise ValueError("credenciais de dono e atacante devem ser diferentes")
+
+    def objects(self, plan):
+        return {"target": {"url": plan["target"]["url"], "marker": plan["target"]["marker"]}}
+
+    def asset_urls(self, plan):
+        return [plan["target"]["url"]]
+
+    def run(self, plan, engine):
+        state = engine.state
+        original, write = plan["target"]["marker"], plan["write"]
+        attempted = False
+        try:
+            if engine.observe("control_owner", "owner", "target") != (200, True):
+                state.update(status="inconclusive", reason="owner_control_failed")
+                return
+            attempted = True
+            write_status = engine.observe_write("attempt_write", "attacker", "target", write["method"], write["body"])
+            _, after_match = engine.observe("readback_after", "owner", "target", expect_marker=write["marker"])
+            if after_match and write_status in {200, 201, 202, 204}:
+                state.update(status="confirmed", reason="cross_account_write_took_effect")
+            elif write_status in DENIED and not after_match:
+                state.update(status="refuted", reason="cross_account_write_denied_object_intact")
+            else:
+                state.update(status="inconclusive", reason="ambiguous_cross_account_write")
+        finally:
+            if attempted:
+                state["attack_status"] = state.get("status")
+                state["cleanup"] = "pending"
+                engine.restore("target", "owner", plan["cleanup"]["method"], plan["cleanup"]["body"], original)
+                state["cleanup"] = "restored"
+
+
+PROFILES = {profile.name: profile for profile in (CrossAccountRead(), UnauthenticatedRead(), CrossAccountWrite())}
 
 
 def validate(plan):
@@ -188,11 +296,13 @@ def validate(plan):
     if not isinstance(plan["hypothesis"], str) or not 1 <= len(plan["hypothesis"]) <= 1000:
         raise ValueError("hipótese obrigatória, até 1000 caracteres")
     policy = plan["policy"]
-    keys(policy, {"reviewed", "automation_allowed", "owned_test_accounts", "private_objects", "scope_revision", "required_headers_env"})
+    keys(policy, {"reviewed", "automation_allowed", "owned_test_accounts", "private_objects", "scope_revision", "required_headers_env"} | getattr(profile, "POLICY_EXTRA", set()))
     if any(policy[k] is not True for k in ("reviewed", "automation_allowed", "owned_test_accounts", "private_objects")):
         raise ValueError("revise política, automação, contas próprias e objetos privados")
     if not isinstance(policy["scope_revision"], str) or not policy["scope_revision"] or policy["scope_revision"] == "unapproved":
         raise ValueError("revisão aprovada do Mind necessária")
+    if "effects" in policy:  # perfis de escrita exigem política de efeitos revisada
+        profile.validate_effects(policy["effects"])
     env_name(policy["required_headers_env"])
     limits = plan["limits"]
     keys(limits, {"requests", "seconds", "timeout", "rate", "response_bytes"})
@@ -247,12 +357,7 @@ class Transport:
     def __init__(self):
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
-    def get(self, url, headers, timeout, max_bytes):
-        request = urllib.request.Request(url, headers={**headers, "Accept": "application/json", "Accept-Encoding": "identity"}, method="GET")
-        try:
-            response = self.opener.open(request, timeout=timeout)
-        except urllib.error.HTTPError as error:
-            response = error
+    def _drain(self, response, timeout, max_bytes):
         with response:
             chunks, size = [], 0
             deadline = time.monotonic() + timeout
@@ -266,8 +371,28 @@ class Transport:
                 if size > max_bytes:
                     raise ValueError("response_limit")
                 chunks.append(chunk)
-            body = b"".join(chunks)
-            return response.code, body
+            return response.code, b"".join(chunks)
+
+    def get(self, url, headers, timeout, max_bytes):
+        request = urllib.request.Request(url, headers={**headers, "Accept": "application/json", "Accept-Encoding": "identity"}, method="GET")
+        try:
+            response = self.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            response = error
+        return self._drain(response, timeout, max_bytes)
+
+    def send(self, url, headers, method, body, timeout, max_bytes):
+        """Escrita restrita (PATCH/PUT) com corpo JSON sintético; mesmo opener sem redirect/proxy/cookie."""
+        if method not in {"PATCH", "PUT"}:
+            raise ValueError("método de escrita inválido")
+        request = urllib.request.Request(
+            url, data=body, method=method,
+            headers={**headers, "Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"})
+        try:
+            response = self.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            response = error
+        return self._drain(response, timeout, max_bytes)
 
 
 class MindGate:
@@ -300,16 +425,24 @@ class Engine:
     `observe` jamais repete tráfego por conta própria; o perfil decide a sequência
     de passos e os vereditos. Orçamento, rate e gate do Mind são checados aqui.
     """
-    def __init__(self, plan, gate, transport, save, common, credentials, objects, limiter, limits, started, state):
+    def __init__(self, plan, gate, transport, save, common, credentials, objects, limiter, limits, started, state, attack_requests):
         self.plan, self.gate, self.transport, self.save = plan, gate, transport, save
         self.common, self.credentials, self.objects = common, credentials, objects
         self.limiter, self.limits, self.started, self.state = limiter, limits, started, state
+        self.attack_requests = attack_requests
 
-    def observe(self, label, actor, obj_key):
-        self.limiter.wait()
-        limits = self.limits
-        if len(self.state["observations"]) >= limits["requests"] or time.monotonic() - self.started >= limits["seconds"]:
+    def _budget(self):
+        # Orçamento de ataque: limpeza/verificação obrigatórias não passam por aqui.
+        if len(self.state["observations"]) >= self.attack_requests or time.monotonic() - self.started >= self.limits["seconds"]:
             raise Blocked("budget_exhausted")
+
+    def _headers(self, actor):
+        return {**self.common, **self.credentials.get(actor, {})}
+
+    def observe(self, label, actor, obj_key, expect_marker=None):
+        self.limiter.wait()
+        self._budget()
+        limits = self.limits
         target = self.objects[obj_key]
         revision = self.gate.check(target["url"])
         remaining = limits["seconds"] - (time.monotonic() - self.started)
@@ -319,11 +452,12 @@ class Engine:
                  "scope_revision": revision, "state": "attempted"}
         self.state["observations"].append(event)
         self.save(self.state)
-        status, body = self.transport.get(target["url"], {**self.common, **self.credentials.get(actor, {})},
+        status, body = self.transport.get(target["url"], self._headers(actor),
                                           min(limits["timeout"], remaining), limits["response_bytes"])
+        expected = target["marker"] if expect_marker is None else expect_marker
         match = False
         try:
-            match = pointer_value(body, self.plan["assertion"]["json_pointer"]) == target["marker"]
+            match = pointer_value(body, self.plan["assertion"]["json_pointer"]) == expected
         except (ValueError, KeyError, TypeError, IndexError, UnicodeError, RecursionError):
             pass
         event.update(state="received", http_status=status, marker_match=match,
@@ -334,6 +468,74 @@ class Engine:
         if status == 429 or status >= 500:
             raise Blocked("target_unavailable_or_rate_limited")
         return status, match
+
+    def observe_write(self, label, actor, obj_key, method, body_obj):
+        self.limiter.wait()
+        self._budget()
+        limits = self.limits
+        target = self.objects[obj_key]
+        revision = self.gate.check(target["url"])
+        remaining = limits["seconds"] - (time.monotonic() - self.started)
+        if remaining <= 0:
+            raise Blocked("budget_exhausted")
+        event = {"step": label, "actor": actor, "object": obj_key, "method": method, "at": now(),
+                 "scope_revision": revision, "state": "attempted"}
+        self.state["observations"].append(event)
+        self.save(self.state)
+        status, body = self.transport.send(target["url"], self._headers(actor), method,
+                                           json.dumps(body_obj).encode(), min(limits["timeout"], remaining), limits["response_bytes"])
+        event.update(state="received", http_status=status, response_bytes=len(body),
+                     response_sha256=hashlib.sha256(body).hexdigest())
+        self.save(self.state)
+        if time.monotonic() - self.started > limits["seconds"]:
+            raise Blocked("budget_exhausted")
+        if status == 429 or status >= 500:
+            raise Blocked("target_unavailable_or_rate_limited")
+        return status
+
+    def restore(self, obj_key, actor, method, body_obj, original_marker):
+        """Restauração obrigatória: escrita do dono de volta ao marcador original + verificação.
+
+        Fora do orçamento de ataque (restaurar é mandatório), mas ainda sob rate e gate do
+        Mind. Qualquer falha vira CleanupError → o experimento é `failed` e exige intervenção.
+        """
+        target, limits = self.objects[obj_key], self.limits
+        self.limiter.wait()
+        try:
+            revision = self.gate.check(target["url"])
+        except (Blocked, HiveError) as exc:
+            raise CleanupError("cleanup_blocked_scope") from exc
+        event = {"step": "cleanup", "actor": actor, "object": obj_key, "method": method, "at": now(),
+                 "scope_revision": revision, "state": "attempted", "mandatory": True}
+        self.state["observations"].append(event)
+        self.save(self.state)
+        try:
+            status, _ = self.transport.send(target["url"], self._headers(actor), method,
+                                            json.dumps(body_obj).encode(), limits["timeout"], limits["response_bytes"])
+        except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, TimeoutError) as exc:
+            raise CleanupError("cleanup_write_failed") from exc
+        event.update(state="received", http_status=status)
+        self.save(self.state)
+        if status >= 400:
+            raise CleanupError("cleanup_write_rejected")
+        self.limiter.wait()
+        try:
+            revision = self.gate.check(target["url"])
+        except (Blocked, HiveError) as exc:
+            raise CleanupError("cleanup_unverified_scope") from exc
+        verify = {"step": "verify_cleanup", "actor": actor, "object": obj_key, "at": now(),
+                  "scope_revision": revision, "state": "attempted", "mandatory": True}
+        self.state["observations"].append(verify)
+        self.save(self.state)
+        try:
+            status, body = self.transport.get(target["url"], self._headers(actor), limits["timeout"], limits["response_bytes"])
+            ok = status == 200 and pointer_value(body, self.plan["assertion"]["json_pointer"]) == original_marker
+        except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, TimeoutError, KeyError, IndexError, UnicodeError, RecursionError) as exc:
+            raise CleanupError("cleanup_unverified") from exc
+        verify.update(state="received", http_status=status, marker_match=ok)
+        self.save(self.state)
+        if not ok:
+            raise CleanupError("cleanup_unverified")
 
 
 def execute(plan, gate, transport, save):
@@ -350,9 +552,13 @@ def execute(plan, gate, transport, save):
     limiter = RateLimiter(limits["rate"])
     state = new_state(plan)
     save(state)
-    engine = Engine(plan, gate, transport, save, common, credentials, profile.objects(plan), limiter, limits, started, state)
+    attack_requests = getattr(profile, "ATTACK_REQUESTS", profile.REQUESTS)
+    engine = Engine(plan, gate, transport, save, common, credentials, profile.objects(plan), limiter, limits, started, state, attack_requests)
     try:
         profile.run(plan, engine)
+    except CleanupError as exc:
+        # Restauração não confirmada: o objeto pode estar modificado. Resultado mais grave que o veredito.
+        state.update(status="failed", reason=str(exc), manual_restoration_required=True)
     except Blocked as exc:
         state.update(status="blocked", reason=str(exc))
     except HiveError:
