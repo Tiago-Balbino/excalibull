@@ -135,8 +135,9 @@ públicas nem altera classificação/permissões do Hive.
 7. Responder ao operador com ID, estado, evidências, limites/custo disponível,
    revisão humana pendente e situação real da publicação.
 
-MVP: somente `cross-account-read`, seis GETs no máximo, duas contas próprias;
-sem geração autônoma de planos por IA. Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
+Perfis somente leitura (GET): `cross-account-read` (6 GETs, duas contas próprias) e
+`unauthenticated-read` (4 GETs, uma conta própria); `limits.requests` bate com o perfil.
+Sem geração autônoma de planos por IA. Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
 Evolução: [docs/PLANO-CARRASCO.md](docs/PLANO-CARRASCO.md).
 
 Exibir o fluxo selecionado, o estágio atual e resultados/pendências. Todo recon
