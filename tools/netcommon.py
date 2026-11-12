@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import gzip
 import io
+import json
+import os
+import re
 import threading
 import time
 import urllib.error
@@ -33,6 +36,32 @@ except Exception:  # pragma: no cover - fallback se extract mudar de lugar
 
 # Códigos HTTP que valem retry (transitórios).
 _RETRY_CODES = {429, 500, 502, 503, 504}
+
+# Header obrigatório de identificação exigido por alguns programas (ex.: Deriv exige
+# `X-HackerOne-Research: <handle>` em CADA requisição de teste). Lido de um env var JSON
+# e injetado só no `http_get` (que bate no alvo); fontes passivas de terceiros têm fetch
+# próprio e não recebem o header, evitando vazar o handle para crt.sh/otx/etc.
+REQUIRED_HEADERS_ENV = "EXCALIBULL_REQUIRED_HEADERS"
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+# Nunca deixar o env sobrescrever transporte/credencial: recon é anônimo.
+_FORBIDDEN_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "proxy-authorization",
+                      "authorization", "cookie", "accept", "accept-encoding", "user-agent"}
+
+
+def required_headers(env: str = REQUIRED_HEADERS_ENV) -> dict:
+    """Headers obrigatórios do programa, de um env var JSON ({} se ausente). Falha alto se
+    vier credencial ou header de transporte — recon não envia credencial."""
+    value = json.loads(os.environ.get(env) or "{}")
+    if not isinstance(value, dict):
+        raise ValueError(f"{env} deve ser objeto JSON")
+    out: dict[str, str] = {}
+    for key, item in value.items():
+        if (not isinstance(key, str) or not _HEADER_NAME.fullmatch(key)
+                or not isinstance(item, str) or any(ord(c) < 32 or ord(c) > 126 for c in item)
+                or key.lower() in _FORBIDDEN_HEADERS or key.lower() in {k.lower() for k in out}):
+            raise ValueError("header obrigatório inválido ou credencial nos headers do recon")
+        out[key] = item
+    return out
 
 
 class RateLimiter:
@@ -70,6 +99,7 @@ def http_get(url: str, timeout: float = 15, limiter: "RateLimiter | None" = None
     um 4xx (exceto 429) volta imediatamente (repetir não ajuda).
     """
     h = {"User-Agent": ua, "Accept-Encoding": "gzip"}
+    h.update(required_headers())  # headers obrigatórios do programa (env); base, antes dos explícitos
     if headers:
         h.update(headers)
     opener = None

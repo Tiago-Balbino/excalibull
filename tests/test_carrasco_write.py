@@ -24,7 +24,7 @@ def wplan(monkeypatch):
 
 
 class Gate:
-    def check(self, url):
+    def check(self, url, method="GET"):
         return "approved-test-revision"
 
 
@@ -171,3 +171,110 @@ def test_attacker_and_owner_need_distinct_envs(wplan):
 def test_write_transport_rejects_non_patch_put():
     with pytest.raises(ValueError):
         c.Transport().send("https://app.example.invalid/a", {}, "DELETE", b"{}", 2, 10)
+
+
+@pytest.mark.parametrize("readback", [401, 403, 404, 302])
+def test_readback_error_with_marker_does_not_confirm(wplan, readback):
+    state, _, _ = wrun(wplan, readback=readback)
+    assert state["status"] == "inconclusive"
+    assert state["cleanup"] == "restored"
+
+
+@pytest.mark.parametrize("shown", ["other-value", None])
+def test_absence_of_attack_marker_is_not_proof_of_intact_object(wplan, shown):
+    transport = WriteTransport(wplan, attacker_write=403)
+    get = transport.get
+    def altered(*args):
+        status, body = get(*args)
+        if transport.gets == 2:
+            body = json.dumps({"content": shown}).encode()
+        return status, body
+    transport.get = altered
+    state = c.execute(wplan, Gate(), transport, lambda s: None)
+    assert state["status"] == "inconclusive"
+
+
+def test_expired_attacker_session_is_inconclusive(wplan):
+    state, _, _ = wrun(wplan, attacker_write=401)
+    assert state["status"] == "inconclusive"
+
+
+def test_scope_denied_before_write_does_not_trigger_owner_write(wplan):
+    class DenyWrite(Gate):
+        def check(self, url, method="GET"):
+            if method != "GET":
+                raise c.Blocked("scope_denied_or_changed")
+            return super().check(url, method)
+    transport = WriteTransport(wplan)
+    state = c.execute(wplan, DenyWrite(), transport, lambda s: None)
+    assert state["status"] == "blocked"
+    assert len(transport.calls) == 1
+    assert "cleanup" not in state
+
+
+def test_timeout_after_side_effect_still_restores(wplan):
+    transport = WriteTransport(wplan)
+    send = transport.send
+    def uncertain(*args):
+        result = send(*args)
+        if len(transport.calls) == 2:
+            raise TimeoutError("PRIVATE_DETAILS")
+        return result
+    transport.send = uncertain
+    saved = []
+    state = c.execute(wplan, Gate(), transport, lambda s: saved.append(copy.deepcopy(s)))
+    assert state["status"] == "inconclusive" and state["cleanup"] == "restored"
+    assert transport.stored == wplan["target"]["marker"]
+    assert state["manual_restoration_required"] is False
+    assert any(s.get("manual_restoration_required") is True for s in saved)
+    assert "PRIVATE_DETAILS" not in json.dumps(state)
+
+
+def test_scope_revoked_after_mutation_keeps_manual_restoration_pending(wplan):
+    class Revoked(Gate):
+        calls = 0
+        def check(self, url, method="GET"):
+            self.calls += 1
+            if self.calls > 2:
+                raise c.Blocked("scope_denied_or_changed")
+            return super().check(url, method)
+    transport = WriteTransport(wplan)
+    state = c.execute(wplan, Revoked(), transport, lambda s: None)
+    assert state["status"] == "failed"
+    assert state["manual_restoration_required"] is True
+    assert state["cleanup"] == "pending"
+    assert [method for method, _ in transport.calls] == ["GET", "PATCH"]
+
+
+def test_cleanup_redirect_is_rejected_even_if_marker_would_match(wplan):
+    state, _, _ = wrun(wplan, owner_write=302)
+    assert state["status"] == "failed"
+    assert state["reason"] == "cleanup_write_rejected"
+
+
+def test_confirmation_uses_effect_even_if_write_claimed_denied(wplan):
+    transport = WriteTransport(wplan)
+    send = transport.send
+    def misreported(*args):
+        result = send(*args)
+        return (403, b"{}") if len(transport.calls) == 2 else result
+    transport.send = misreported
+    state = c.execute(wplan, Gate(), transport, lambda s: None)
+    assert state["status"] == "confirmed" and state["cleanup"] == "restored"
+
+
+def test_payload_nan_is_rejected(wplan):
+    wplan["write"]["body"]["other"] = float("nan")
+    with pytest.raises(ValueError):
+        c.validate(wplan)
+
+
+def test_cleanup_journal_failure_keeps_manual_alert_and_failed_status(wplan):
+    transport = WriteTransport(wplan)
+    def save(state):
+        if state["observations"] and state["observations"][-1]["step"] == "cleanup":
+            raise OSError("PRIVATE_STORAGE_PATH")
+    state = c.execute(wplan, Gate(), transport, save)
+    assert state["status"] == "failed" and state["manual_restoration_required"] is True
+    assert state["cleanup"] == "pending"
+    assert "PRIVATE_STORAGE_PATH" not in json.dumps(state)

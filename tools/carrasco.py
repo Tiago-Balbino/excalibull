@@ -4,8 +4,8 @@
 Cada perfil declara seu schema, seus oráculos (sequência de passos e controles) e
 seus vereditos. Perfis atuais (somente leitura, GET): `cross-account-read` (IDOR de
 leitura entre duas contas) e `unauthenticated-read` (objeto privado legível sem
-autenticação). Perfis de escrita exigem política de efeitos, leitura de volta e
-limpeza antes de existirem; não há método não-GET neste transporte.
+autenticação), além de `cross-account-write` com política de efeitos,
+leitura de volta e restauração obrigatória.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ import urllib.request
 from urllib.parse import urlsplit
 import uuid
 
+import bgjobs
 from hive_documents import identifier, identity, now
 from hive_gateway import HiveClient, HiveError
 from hive_outbox import prepare, private_write
@@ -93,7 +94,7 @@ def _validate_write(spec, pointer, expected_marker, *, with_marker):
     if not isinstance(spec["body"], dict):
         raise ValueError("corpo de escrita deve ser objeto JSON")
     try:
-        payload = json.dumps(spec["body"], ensure_ascii=False)
+        payload = json.dumps(spec["body"], ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):
         raise ValueError("corpo de escrita deve ser JSON serializável")
     if len(payload.encode()) > 4096:
@@ -255,26 +256,25 @@ class CrossAccountWrite:
     def run(self, plan, engine):
         state = engine.state
         original, write = plan["target"]["marker"], plan["write"]
-        attempted = False
         try:
             if engine.observe("control_owner", "owner", "target") != (200, True):
                 state.update(status="inconclusive", reason="owner_control_failed")
                 return
-            attempted = True
             write_status = engine.observe_write("attempt_write", "attacker", "target", write["method"], write["body"])
-            _, after_match = engine.observe("readback_after", "owner", "target", expect_marker=write["marker"])
-            if after_match and write_status in {200, 201, 202, 204}:
+            read_status, after_match = engine.observe("readback_after", "owner", "target", expect_marker=write["marker"])
+            original_match = state["observations"][-1]["original_marker_match"]
+            if read_status == 200 and after_match:
                 state.update(status="confirmed", reason="cross_account_write_took_effect")
-            elif write_status in DENIED and not after_match:
+            elif write_status in {403, 404} and read_status == 200 and original_match:
                 state.update(status="refuted", reason="cross_account_write_denied_object_intact")
             else:
                 state.update(status="inconclusive", reason="ambiguous_cross_account_write")
         finally:
-            if attempted:
-                state["attack_status"] = state.get("status")
-                state["cleanup"] = "pending"
+            if state.get("write_attempted"):
+                state["attack_status"] = state["status"] if state["status"] != "running" else "interrupted"
                 engine.restore("target", "owner", plan["cleanup"]["method"], plan["cleanup"]["body"], original)
                 state["cleanup"] = "restored"
+                state["manual_restoration_required"] = False
 
 
 PROFILES = {profile.name: profile for profile in (CrossAccountRead(), UnauthenticatedRead(), CrossAccountWrite())}
@@ -399,10 +399,10 @@ class MindGate:
     def __init__(self, client, plan):
         self.client, self.plan = client, plan
 
-    def check(self, url):
+    def check(self, url, method="GET"):
         asset = {"type": "url_prefix", "value": url}
         result = self.client.context(self.plan["program_id"], asset,
-                                     "Carrasco: conferir escopo para GET automatizado de objeto próprio de teste")
+                                     f"Carrasco: conferir escopo para {method} automatizado de objeto próprio de teste; regras de método revisadas pelo operador")
         scope = result.get("scope", {})
         if (scope.get("confirmed") is not True or scope.get("status") != "authorized"
                 or scope.get("action_allowed") is not True
@@ -416,6 +416,7 @@ def new_state(plan):
             "hypothesis_id": plan["id"], "profile": plan["profile"], "plan_sha256": digest(plan), "started_at": now(),
             "status": "running", "reason": "in_progress", "observations": [],
             "evidence_refs": plan["evidence_refs"],
+            "requests_max": PROFILES[plan["profile"]].REQUESTS,
             "publication": "pending", "human_review_required": True, "llm_calls": 0}
 
 
@@ -425,16 +426,28 @@ class Engine:
     `observe` jamais repete tráfego por conta própria; o perfil decide a sequência
     de passos e os vereditos. Orçamento, rate e gate do Mind são checados aqui.
     """
-    def __init__(self, plan, gate, transport, save, common, credentials, objects, limiter, limits, started, state, attack_requests):
+    def __init__(self, plan, gate, transport, save, common, credentials, objects, limiter, limits, started, state, attack_requests,
+                 cancelled=None):
         self.plan, self.gate, self.transport, self.save = plan, gate, transport, save
         self.common, self.credentials, self.objects = common, credentials, objects
         self.limiter, self.limits, self.started, self.state = limiter, limits, started, state
         self.attack_requests = attack_requests
+        self.cancelled = cancelled or (lambda: False)
 
     def _budget(self):
-        # Orçamento de ataque: limpeza/verificação obrigatórias não passam por aqui.
+        # Orçamento de ataque: limpeza/verificação obrigatórias não passam por aqui,
+        # portanto cancelar interrompe o ataque mas nunca a restauração.
+        if self.cancelled():
+            raise Blocked("cancelled_by_operator")
         if len(self.state["observations"]) >= self.attack_requests or time.monotonic() - self.started >= self.limits["seconds"]:
             raise Blocked("budget_exhausted")
+
+    def _persist_cleanup(self):
+        """Journal da limpeza: sem registro não há envio (tentativa gravada antes do request)."""
+        try:
+            self.save(self.state)
+        except OSError as exc:
+            raise CleanupError("cleanup_journal_failed") from exc
 
     def _headers(self, actor):
         return {**self.common, **self.credentials.get(actor, {})}
@@ -444,7 +457,7 @@ class Engine:
         self._budget()
         limits = self.limits
         target = self.objects[obj_key]
-        revision = self.gate.check(target["url"])
+        revision = self.gate.check(target["url"], method="GET")
         remaining = limits["seconds"] - (time.monotonic() - self.started)
         if remaining <= 0:
             raise Blocked("budget_exhausted")
@@ -455,12 +468,14 @@ class Engine:
         status, body = self.transport.get(target["url"], self._headers(actor),
                                           min(limits["timeout"], remaining), limits["response_bytes"])
         expected = target["marker"] if expect_marker is None else expect_marker
-        match = False
+        match = original_match = False
         try:
-            match = pointer_value(body, self.plan["assertion"]["json_pointer"]) == expected
+            observed = pointer_value(body, self.plan["assertion"]["json_pointer"])
+            match = observed == expected
+            original_match = observed == target["marker"]
         except (ValueError, KeyError, TypeError, IndexError, UnicodeError, RecursionError):
             pass
-        event.update(state="received", http_status=status, marker_match=match,
+        event.update(state="received", http_status=status, marker_match=match, original_marker_match=original_match,
                      response_bytes=len(body), response_sha256=hashlib.sha256(body).hexdigest())
         self.save(self.state)
         if time.monotonic() - self.started > limits["seconds"]:
@@ -474,13 +489,15 @@ class Engine:
         self._budget()
         limits = self.limits
         target = self.objects[obj_key]
-        revision = self.gate.check(target["url"])
+        revision = self.gate.check(target["url"], method=method)
         remaining = limits["seconds"] - (time.monotonic() - self.started)
         if remaining <= 0:
             raise Blocked("budget_exhausted")
         event = {"step": label, "actor": actor, "object": obj_key, "method": method, "at": now(),
                  "scope_revision": revision, "state": "attempted"}
         self.state["observations"].append(event)
+        # Persistir obrigação antes do envio: timeout/crash pode ocultar uma escrita efetivada.
+        self.state.update(write_attempted=True, cleanup="pending", manual_restoration_required=True)
         self.save(self.state)
         status, body = self.transport.send(target["url"], self._headers(actor), method,
                                            json.dumps(body_obj).encode(), min(limits["timeout"], remaining), limits["response_bytes"])
@@ -502,44 +519,48 @@ class Engine:
         target, limits = self.objects[obj_key], self.limits
         self.limiter.wait()
         try:
-            revision = self.gate.check(target["url"])
+            revision = self.gate.check(target["url"], method=method)
         except (Blocked, HiveError) as exc:
             raise CleanupError("cleanup_blocked_scope") from exc
         event = {"step": "cleanup", "actor": actor, "object": obj_key, "method": method, "at": now(),
                  "scope_revision": revision, "state": "attempted", "mandatory": True}
         self.state["observations"].append(event)
-        self.save(self.state)
+        self._persist_cleanup()
         try:
             status, _ = self.transport.send(target["url"], self._headers(actor), method,
                                             json.dumps(body_obj).encode(), limits["timeout"], limits["response_bytes"])
         except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, TimeoutError) as exc:
             raise CleanupError("cleanup_write_failed") from exc
         event.update(state="received", http_status=status)
-        self.save(self.state)
-        if status >= 400:
+        self._persist_cleanup()
+        if not 200 <= status < 300:
             raise CleanupError("cleanup_write_rejected")
         self.limiter.wait()
         try:
-            revision = self.gate.check(target["url"])
+            revision = self.gate.check(target["url"], method="GET")
         except (Blocked, HiveError) as exc:
             raise CleanupError("cleanup_unverified_scope") from exc
         verify = {"step": "verify_cleanup", "actor": actor, "object": obj_key, "at": now(),
                   "scope_revision": revision, "state": "attempted", "mandatory": True}
         self.state["observations"].append(verify)
-        self.save(self.state)
+        self._persist_cleanup()
         try:
             status, body = self.transport.get(target["url"], self._headers(actor), limits["timeout"], limits["response_bytes"])
             ok = status == 200 and pointer_value(body, self.plan["assertion"]["json_pointer"]) == original_marker
-        except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, TimeoutError, KeyError, IndexError, UnicodeError, RecursionError) as exc:
+        except (OSError, ValueError, TypeError, urllib.error.URLError, http.client.HTTPException, TimeoutError, KeyError, IndexError, UnicodeError, RecursionError) as exc:
             raise CleanupError("cleanup_unverified") from exc
         verify.update(state="received", http_status=status, marker_match=ok)
-        self.save(self.state)
+        self._persist_cleanup()
         if not ok:
             raise CleanupError("cleanup_unverified")
 
 
-def execute(plan, gate, transport, save):
-    """Dependências injetáveis somente pela API Python para testes offline."""
+def execute(plan, gate, transport, save, *, state=None, cancelled=None):
+    """Dependências injetáveis somente pela API Python para testes offline.
+
+    `cancelled` é consultado antes de cada passo de ataque (cancelamento cooperativo);
+    a restauração obrigatória do perfil de escrita roda mesmo após o cancelamento.
+    """
     validate(plan)
     profile = PROFILES[plan["profile"]]
     common = headers_from_env(plan["policy"]["required_headers_env"], authenticated=False)
@@ -550,10 +571,11 @@ def execute(plan, gate, transport, save):
     limits = plan["limits"]
     started = time.monotonic()
     limiter = RateLimiter(limits["rate"])
-    state = new_state(plan)
+    state = new_state(plan) if state is None else state
     save(state)
     attack_requests = getattr(profile, "ATTACK_REQUESTS", profile.REQUESTS)
-    engine = Engine(plan, gate, transport, save, common, credentials, profile.objects(plan), limiter, limits, started, state, attack_requests)
+    engine = Engine(plan, gate, transport, save, common, credentials, profile.objects(plan), limiter, limits, started, state,
+                    attack_requests, cancelled)
     try:
         profile.run(plan, engine)
     except CleanupError as exc:
@@ -565,8 +587,15 @@ def execute(plan, gate, transport, save):
         state.update(status="blocked", reason="scope_service_unavailable")
     except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException):
         state.update(status="inconclusive", reason="transport_or_response_failure")
+    if state.get("manual_restoration_required") and state["status"] != "failed":
+        state.update(status="failed", reason="cleanup_unverified")
     state.update(ended_at=now(), elapsed_seconds=round(time.monotonic() - started, 3))
-    save(state)
+    try:
+        save(state)
+    except OSError:
+        # O alerta de restauração já foi gravado antes do envio; sinalizar journal
+        # possivelmente desatualizado sem copiar a mensagem (pode conter caminhos privados).
+        state["journal_write_failed"] = True
     return state
 
 
@@ -585,9 +614,7 @@ TERMINAL = {"confirmed", "refuted", "inconclusive", "blocked", "failed"}
 
 
 def job_directory(job):
-    if not isinstance(job, str) or not re.fullmatch(r"[a-f0-9]{32}", job):
-        raise ValueError("ID de job inválido")
-    return JOBS / job
+    return bgjobs.job_directory(JOBS, job)
 
 
 def submit(plan):
@@ -606,12 +633,7 @@ def submit(plan):
     state.update(status="queued", reason="awaiting_worker")
     private_write(directory / "result.json", json.dumps(state))
     try:
-        with (directory / "worker.log").open("wb") as output:
-            os.chmod(directory / "worker.log", 0o600)
-            process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "run", str(directory / "plan.json"),
-                                        "--job", job], stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                       cwd=ROOT, start_new_session=True)
-        private_write(directory / "job.json", json.dumps({"job_id": job, "pid": process.pid, "created_at": now()}))
+        bgjobs.spawn(Path(__file__), ["run", str(directory / "plan.json"), "--job", job], directory, job, ROOT)
     except OSError:
         state.update(status="failed", reason="worker_launch_failed")
         private_write(directory / "result.json", json.dumps(state))
@@ -623,9 +645,24 @@ def job_status(job):
     directory = job_directory(job)
     state = json.loads((directory / "result.json").read_text())
     # Status descreve o journal; um processo interrompido pode deixar running.
+    observations = state.get("observations", [])
+    last = observations[-1] if observations else {}
+    finished = state["status"] in TERMINAL and state["publication"] in {"staged", "pending", "published"}
+    worker = bgjobs.worker_state(directory, finished)
     return {"job_id": job, "status": state["status"], "publication": state["publication"],
+            # `dead`: o processo morreu sem resultado terminal. Preservar journal e
+            # inspecionar worker.log; nunca reiniciar automaticamente.
+            "worker": worker, "stale": worker == "dead",
+            "cancel_requested": bgjobs.cancel_requested(directory),
+            "reason": state.get("reason"), "profile": state.get("profile"),
+            "progress": {"attempted": len(observations),
+                         "received": sum(o.get("state") == "received" for o in observations),
+                         "requests_max": state.get("requests_max"),
+                         "last_step": last.get("step"), "last_step_state": last.get("state")},
+            "cleanup": state.get("cleanup"),
+            "manual_restoration_required": state.get("manual_restoration_required", False),
             "result": str(directory / "result.json"), "human_review_required": True,
-            "finished": state["status"] in TERMINAL and state["publication"] in {"staged", "pending", "published"}}
+            "finished": finished}
 
 
 def wait_job(job, seconds):
@@ -634,9 +671,36 @@ def wait_job(job, seconds):
     deadline = time.monotonic() + seconds
     while True:
         result = job_status(job)
-        if result["finished"] or time.monotonic() >= deadline:
+        # Worker morto não vai terminar: retornar já em vez de esgotar o timeout.
+        if result["finished"] or result["stale"] or time.monotonic() >= deadline:
             return result
         time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+
+
+def cancel_job(job):
+    """Cancelamento cooperativo: o worker para antes do próximo passo de ataque.
+
+    No `cross-account-write`, se a escrita já foi tentada, a limpeza obrigatória
+    e a verificação ainda rodam. Não mata o processo nem apaga o journal.
+    """
+    directory = job_directory(job)
+    if not (directory / "result.json").exists():
+        raise ValueError("job inexistente")
+    first = bgjobs.request_cancel(directory)
+    return {**job_status(job), "cancel_requested": True, "cancel_already_requested": not first}
+
+
+def list_jobs():
+    rows = []
+    for job in bgjobs.list_jobs(JOBS):
+        try:
+            status = job_status(job)
+        except (OSError, ValueError, KeyError):
+            rows.append({"job_id": job, "status": "unreadable"})
+            continue
+        rows.append({key: status[key] for key in ("job_id", "status", "reason", "profile", "publication",
+                                                  "worker", "stale", "manual_restoration_required", "finished")})
+    return {"jobs": rows, "count": len(rows), "root": str(JOBS)}
 
 
 def main(argv=None):
@@ -646,14 +710,23 @@ def main(argv=None):
         sub.add_parser(command).add_argument("plan", type=Path)
     sub.choices["run"].add_argument("--job", help=argparse.SUPPRESS)
     sub.choices["stage"].add_argument("result", type=Path)
-    for command in ("status", "wait"):
+    for command in ("status", "wait", "cancel"):
         sub.add_parser(command).add_argument("job")
     sub.choices["wait"].add_argument("--seconds", type=int, default=30)
+    sub.add_parser("jobs")
     args = parser.parse_args(argv)
     try:
-        if args.command in {"status", "wait"}:
-            result = job_status(args.job) if args.command == "status" else wait_job(args.job, args.seconds)
+        if args.command == "jobs":
+            print(json.dumps(list_jobs()))
+            return 0
+        if args.command in {"status", "wait", "cancel"}:
+            if args.command == "cancel":
+                result = cancel_job(args.job)
+            else:
+                result = job_status(args.job) if args.command == "status" else wait_job(args.job, args.seconds)
             print(json.dumps(result))
+            if result["stale"]:
+                return 2  # Worker morto sem resultado terminal: erro, não pendência.
             return 0 if result["finished"] else 1
         plan = validate(json.loads(args.plan.read_text()))
         if args.command == "validate":
@@ -682,7 +755,10 @@ def main(argv=None):
             if state["status"] in TERMINAL:
                 state["publication"] = "preparing"
             private_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        state = new_state(plan)
+        state = json.loads(path.read_text()) if args.job else new_state(plan)
+        if state["plan_sha256"] != digest(plan) or state["status"] not in {"queued", "running"}:
+            raise ValueError("snapshot do job diverge do plano")
+        state.update(status="running", reason="in_progress")
         state["publication"] = "preparing"
         save(state)
         try:
@@ -690,7 +766,8 @@ def main(argv=None):
                 # Histórico é dado não confiável; ausência na busca não significa teste inédito.
                 history = client.call("hive_search", {"program_id": plan["program_id"], "query": plan["hypothesis"]})
                 private_write(run_dir / "history.json", json.dumps(history, ensure_ascii=False))
-                state = execute(plan, MindGate(client, plan), Transport(), save)
+                cancelled = (lambda: bgjobs.cancel_requested(run_dir)) if args.job else None
+                state = execute(plan, MindGate(client, plan), Transport(), save, state=state, cancelled=cancelled)
         except HiveError:
             state.update(status="blocked", reason="history_or_mind_unavailable", ended_at=now())
             save(state)

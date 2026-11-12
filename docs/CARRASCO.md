@@ -96,8 +96,26 @@ O agente chama `wait` em intervalos de até 30 segundos, comunica progresso e
 continua aguardando o mesmo ID. `wait`/`status` nunca emitem requisições ao alvo.
 Timeout significa execução pendente, não conclusão nem licença para repetir.
 `finished` sinaliza resultado terminal e tentativa de staging encerrada; não
-comprova ingestão. Se o processo morrer com `running`, preservar journal e
-inspecionar `worker.log`; não reiniciar o experimento automaticamente.
+comprova ingestão. `progress` mostra tentativas, respostas recebidas, limite e
+último passo; `cleanup`/`manual_restoration_required` mostram restauração pendente,
+inclusive enquanto o processo executa. O `run_id` permanece o mesmo do envio ao
+resultado. Se o processo morrer com `running`, `status`/`wait` mostram
+`worker: "dead"` e `stale: true` (saída 2) e `wait` retorna imediatamente em vez
+de esgotar o timeout. Preservar journal e inspecionar `worker.log`; não reiniciar
+o experimento automaticamente. `worker` também pode ser `alive`, `exited` ou
+`unknown` (sem `job.json`).
+
+```sh
+python3 tools/carrasco.py cancel <job_id>
+python3 tools/carrasco.py jobs
+```
+
+`cancel` é cooperativo: grava um sinal que o worker consulta antes de cada passo de
+ataque e o resultado vira `blocked` com `reason: cancelled_by_operator`. No
+`cross-account-write`, se a escrita já foi tentada, **a limpeza obrigatória e a
+verificação ainda rodam** (`attack_status: interrupted`). `cancel` não mata o
+processo nem apaga o journal. `jobs` lista os jobs locais do mais recente ao mais
+antigo, sem URLs, marcadores ou credenciais.
 
 Para execução em primeiro plano:
 
@@ -109,8 +127,8 @@ python3 tools/carrasco.py run .hive/carrasco-plan.json
 
 | Estado | Interpretação |
 |---|---|
-| `confirmed` | Leitura: marcador privado lido duas vezes pelo ator não autorizado (A ou anônimo), com controles válidos. Escrita: marcador do atacante visível na leitura de volta do dono, com escrita 2xx. Sempre exige revisão humana |
-| `refuted` | Leitura: duas tentativas negadas com 401/403/404. Escrita: escrita negada e objeto intacto na leitura de volta. Não esgota a classe nem outros fluxos |
+| `confirmed` | Leitura: marcador privado lido duas vezes pelo ator não autorizado (A ou anônimo), com controles válidos. Escrita: GET 200 do dono comprova o marcador alterado, mesmo se a resposta de escrita alegar negação. Sempre exige revisão humana |
+| `refuted` | Leitura cruzada: 403/404; leitura anônima: 401/403/404. Escrita: 403/404 e GET 200 do dono com o marcador original comprovado. Não esgota a classe nem outros fluxos |
 | `inconclusive` | Controle, conteúdo, transporte ou repetição insuficientes |
 | `blocked` | Mind/escopo/revisão/limite/429/5xx impediram continuar |
 | `failed` | Pré-condição local, worker ou armazenamento falhou — **ou a limpeza do `cross-account-write` não foi confirmada** (`manual_restoration_required: true`: restaure o objeto à mão) |
@@ -123,6 +141,14 @@ operador, não inferidas somente das respostas.
 401 nas tentativas cruzadas é inconclusivo, pois pode indicar expiração da sessão.
 Mesmo um 403/404 vale somente nas condições observadas; o piloto não verifica
 novamente a sessão A no final e não comprova que toda a classe está protegida.
+
+Na escrita, ausência do marcador alterado não comprova integridade: campo ausente,
+conteúdo inesperado ou leitura de volta sem 200 são inconclusivos. A obrigação de
+restaurar fica registrada antes do envio, pois um timeout pode ocorrer depois do
+efeito no servidor. Bloqueio antes de tentar enviar a escrita não dispara limpeza.
+Redirect da limpeza é rejeitado; restauração continua sujeita ao Mind vigente.
+A verificação confirma o campo do marcador, não a equivalência integral do objeto.
+O journal parcial e os alertas de restauração sobrevivem a erros do worker.
 
 O worker prepara positivos e negativos na outbox existente. `publication=staged`
 significa preparação local. Revise o candidato com `contra prova`, publique e
@@ -148,9 +174,11 @@ validado ou teste offline não comprovam um achado em um programa real.
 
 ## Códigos de saída
 
-`validate`/`submit`/`stage`: 0 em sucesso, 2 em erro. `run`: 0 para confirmed/refuted,
+`validate`/`submit`/`stage`/`jobs`: 0 em sucesso, 2 em erro. `run`: 0 para confirmed/refuted,
 1 para blocked/inconclusive/failed com nota preparada, 2 para erro ou publicação
-pendente. `wait`/`status`: 0 para terminal, 1 para pendente, 2 para erro. Sempre
+pendente. `wait`/`status`/`cancel`: 0 para terminal, 1 para pendente, 2 para erro ou
+worker morto. Falha ao gravar o journal durante a limpeza vira `failed` com
+`cleanup_journal_failed` (a limpeza não é enviada sem registro prévio). Sempre
 interprete também o JSON: saída 0 não implica achado ou publicação remota.
 
 Plano de evolução: [PLANO-CARRASCO.md](PLANO-CARRASCO.md).

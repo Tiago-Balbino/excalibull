@@ -19,7 +19,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urljoin
-from netcommon import RateLimiter
+from netcommon import RateLimiter, required_headers
 from browser_recon import authorized
 
 _PROGRAM = None
@@ -164,6 +164,8 @@ def scan(target, timeout, verify):
     result = {"target": target, "ok": False, "status": None, "findings": []}
     session = requests.Session()
     session.headers.update({"User-Agent": "Sword-Scanner/1.0 (+bug-bounty-recon)"})
+    # Headers obrigatórios do programa (ex.: Deriv: X-HackerOne-Research) em toda requisição.
+    session.headers.update(required_headers())
     try:
         r = checked_get(session, target, timeout=timeout, verify=verify)
     except (requests.RequestException, PermissionError) as e:

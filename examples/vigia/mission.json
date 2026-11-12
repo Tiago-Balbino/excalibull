@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "recon-exemplo",
+  "program_id": "example",
+  "domains": ["example.com"],
+  "hosts": ["app.example.com"],
+  "revisit_known": true,
+  "passive": {"enabled": true},
+  "active_dns": {"enabled": false, "wordlist": "builtin", "permutations": true, "max_candidates": 3000},
+  "dns": {"enabled": true, "resolver": "doh"},
+  "http": {"enabled": true, "probes": ["https:443", "http:80"], "probe_all": false, "extended_ports": []},
+  "policy": {
+    "reviewed": true,
+    "automation_allowed": true,
+    "scope_revision": "REPLACE_WITH_APPROVED_MIND_REVISION",
+    "required_headers_env": "VIGIA_REQUIRED_HEADERS"
+  },
+  "limits": {
+    "max_hosts": 500,
+    "seconds": 3600,
+    "timeout": 8,
+    "rate": 1,
+    "dns_rate": 10,
+    "response_bytes": 65536
+  }
+}

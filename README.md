@@ -104,8 +104,24 @@ de escrita (PATCH/PUT): `cross-account-write` (A altera objeto de B, 5 passos) c
 política de efeitos, corpos revisados, leitura de volta e **limpeza obrigatória** do
 dono — restauração não confirmada vira `failed` e pede correção manual. Todos exigem
 plano/política revisados e autorização do Mind ao vivo; `confirmed` ainda exige revisão
-humana. Credenciais e dados de execução ficam locais, fora do Git. [Uso e resultados](docs/CARRASCO.md) ·
+humana. Credenciais e dados de execução ficam locais, fora do Git. `cancel <job_id>`
+interrompe entre passos (preservando a limpeza obrigatória) e `jobs` lista os jobs;
+worker morto aparece como `stale`. [Uso e resultados](docs/CARRASCO.md) ·
 [Plano e integração dos produtos Hive](docs/PLANO-CARRASCO.md).
+
+O **Vigia** é o bot de recon em segundo plano (**protocolo vigia do mastro**):
+descoberta passiva + DNS + um GET por porta, com gate do Mind por host e por URL
+exata, e classifica cada host como `vivo`, `sem_web`, `morto`, `interno`,
+`fora_de_escopo` ou `nao_verificado`, com diff `novo`/`morreu`/`reviveu`/`mudou`
+contra a execução anterior e leads `[UNTESTED]` de CNAME pendurado:
+
+```sh
+python3 tools/vigia.py validate .hive/vigia-mission.json
+python3 tools/vigia.py submit .hive/vigia-mission.json
+python3 tools/vigia.py wait <job_id> --seconds 30
+```
+
+[Uso, estados e limites](docs/VIGIA.md).
 
 | Código | Ação |
 |---|---|

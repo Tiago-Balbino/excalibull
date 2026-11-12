@@ -125,7 +125,12 @@ públicas nem altera classificação/permissões do Hive.
 4. **Aguardar a resposta:** chamar `wait <job_id> --seconds 30` e consultar o mesmo
    job até conclusão, comunicando progresso. Timeout não encerra o protocolo e não
    dispara nova execução. Interrupção/worker ausente exige inspecionar journal e
-   informar pendência; não reenviar testes automaticamente.
+   informar pendência; não reenviar testes automaticamente. Usar `progress` para
+   o último passo e tratar `manual_restoration_required` como pendência explícita,
+   inclusive quando o job ainda estiver executando. `worker: dead`/`stale: true`
+   (saída 2) significa processo morto sem resultado terminal: `wait` retorna na hora.
+   `cancel <job_id>` interrompe antes do próximo passo de ataque, mas a limpeza
+   obrigatória da escrita ainda roda; `jobs` lista os jobs locais.
 5. Ler resultado, controles, repetição, leitura de volta e referências. `confirmed`
    confirma o experimento delimitado; aplicar `contra prova` para impacto,
    legitimidade, duplicidade e elegibilidade. Outros estados preservam seus limites.
@@ -142,6 +147,49 @@ política de efeitos, corpos revisados, leitura de volta e limpeza obrigatória 
 Operação: [docs/CARRASCO.md](docs/CARRASCO.md).
 Evolução: [docs/PLANO-CARRASCO.md](docs/PLANO-CARRASCO.md).
 
+### `protocolo vigia do mastro` — recon completo em segundo plano: vivos e mortos
+
+Ativação: **"vigia do mastro <program>"**, **"vigia <program>"** ou pedidos
+equivalentes ("ativar/rodar o vigia no <program>", "recon vivo/morto do <program>").
+Entrega uma missão de recon ao Vigia (`tools/vigia.py`) e aguarda o inventário classificado.
+
+1. Consultar Hive por recon anterior, negativos, regras, rate e headers exigidos.
+   Confirmar que o programa permite automação; manual-only não usa o Vigia.
+   Hive indisponível (status/search falhando) = parar e pedir `hive login`/`hive doctor`.
+2. Copiar `examples/vigia/mission.json` para `.hive/vigia-mission.json` (Write, não
+   heredoc: hosts na linha de comando acionam o hook). `domains` = domínios-base
+   dos wildcards do escopo; `hosts` = hosts explícitos do escopo; `program_id` do
+   catálogo. `policy.scope_revision` = `scope.scope_revision` devolvido pelo
+   `hive_get_context` de um ativo autorizado do programa, nunca de nota/memória
+   antiga. Usar o **menor** rate entre programa e missão.
+3. `python3 tools/vigia.py validate <missão>`; depois `submit <missão>`. O worker
+   herda o ambiente do `submit`: `HIVE_HANDLE`/`HIVE_TEAM_TAG` (e
+   `VIGIA_REQUIRED_HEADERS`, se o programa exigir headers, sem credencial) devem
+   estar no perfil do shell ou na **mesma linha** do submit. `! export` do operador
+   não chega ao shell do agente; não hardcodear identidade (`rules/identities.md`)
+   — se faltar, pedir ao operador.
+4. Aguardar com `wait <job_id> --seconds 30`, comunicando `progress`. Mesmas regras
+   do Carrasco: timeout não reenvia, `stale` exige inspecionar journal, `cancel` para
+   antes do próximo host.
+5. Ler `summary`: `vivo`, `sem_web`, `morto`, `interno`, `fora_de_escopo`,
+   `nao_verificado`, e o diff `novo`/`morreu`/`reviveu`/`mudou`. **Não verificado
+   não é morto.** Leads `[UNTESTED]` (CNAME pendurado, IP interno em DNS público)
+   seguem para `seguir o rastro`; hosts vivos alimentam `saquear o navio`.
+6. O worker prepara resumo + inventário em blocos (< 16 KiB) na outbox; publicar com
+   `hive_outbox.py publish`, idle, read-back e Selo. Recuperar com `stage`.
+7. Hosts vivos alimentam o recon de conteúdo: `vigia.py targets <result.json>` emite
+   `--hosts`/`--url` e o comando pronto do `saquear o navio` (que re-gateia cada URL).
+
+Estágios opcionais por missão: descoberta passiva (terceiros), descoberta ativa de
+subdomínios (`active_dns`: wordlist/permutações, cada candidato gateado por host),
+sonda de liveness e portas estendidas (`http.extended_ports`, só em host vivo).
+Força bruta sem retorno (`active_found` baixo) é esperada em alvos atrás de CDN;
+decidir por alvo entre wordlist cheia, permutações ou lista curta.
+
+Gate: Mind por **host** antes do DNS e por **URL exata** antes de cada GET; IP fixado
+no resolvido e nunca não público; um GET em `/` por porta, sem redirect. Operação:
+[docs/VIGIA.md](docs/VIGIA.md).
+
 Exibir o fluxo selecionado, o estágio atual e resultados/pendências. Todo recon
 fecha com nota focada na outbox, entrega a writer, ingestão, idle e read-back. Protocolos
 investigativos seguem a postura vigente e as regras do programa.
@@ -153,6 +201,7 @@ investigativos seguem a postura vigente e as regras do programa.
 | `report` | Dois reports equivalentes PT/EN, reprodução do zero |
 | `achar o x` | Descoberta passiva exclusivamente em terceiros/artefatos disponíveis |
 | `saquear o navio` | Recon ativo médio/completo, JS/endpoints e CORS/headers |
+| `vigia do mastro` | Recon em segundo plano: inventário vivo/morto com diff entre execuções |
 | `pérola negra` | Tráfego observado, estrutura de requisições e revisitas com diff |
 | `seguir o rastro` | Expandir sinais/ramificações até conclusão sustentada |
 | `One Piece` | Tentar todos os testes aplicáveis com uma conta própria |
@@ -506,6 +555,26 @@ diretos autorizados sem impor pipeline automático de todos os protocolos.
 Usar as seis perguntas, buscar evidências de impacto, registrar resultados no
 WAL e publicar no Hive. Encerramento definitivo exige o Selo: handoff, ingestão,
 idle e read-back; não descartar pendências ao trocar modos.
+
+**Calibração (2026-11-12, lição Deriv):**
+1. **Largura antes de profundidade.** Antes de abrir matriz de exaustão em
+   qualquer lead, varrer TODOS os hosts vivos 200 do alvo: raiz, checklist
+   (robots/sitemap/.env/.git/api/swagger/openapi/config), headers de framing
+   (XFO/CSP), bundles JS e sinks (`postMessage`/listeners/token/fetch/ids no
+   corpo). Coverage de saquear com `authorization: blocked` = varredura NÃO
+   feita — nunca tratar como recon concluído.
+2. **Recibos em lote:** `tools/hive_batch_receipts.py <program> --hosts ... --paths ...`
+   (ou `--urls`) emite recibos exatos numa sessão e imprime os pares `-o/URL`
+   para um único curl visível ao hook. Um contexto negado invalida TODOS os
+   recibos vigentes: a ferramenta para no primeiro negado; remover e repetir.
+3. **Pergunta "por que o bug existe":** para cada superfície, escrever a
+   suposição de confiança do dev (quem escolhe o endpoint/ambiente/id/origem?
+   o servidor confere ou confia no cliente?) antes de testar payloads.
+4. **Autorização em fluxo de dinheiro/PII só com contas próprias** (matriz A/B
+   do operador). Sem conta, mapear e provar pré-condições; nunca enviar ids de
+   terceiros a endpoints de cashier/KYC.
+5. **Não descartar peça por severidade isolada** sem tentar encadeá-la
+   (arapuca): registrar como peça e revisitar ao final da varredura.
 
 ### `modo dojo` — treino: write-up → conhecimento retido 🥋
 Ativação: **"abre o dojo"** / **"modo dojo on"**. Desliga: **"fecha o dojo"** / **"modo dojo off"**.

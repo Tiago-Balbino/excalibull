@@ -23,7 +23,7 @@ class Gate:
     def __init__(self):
         self.calls = []
 
-    def check(self, url):
+    def check(self, url, method="GET"):
         self.calls.append(url)
         return "approved-test-revision"
 

@@ -30,7 +30,7 @@ class Gate:
         self.calls = []
         self.fail_at = fail_at
 
-    def check(self, url):
+    def check(self, url, method="GET"):
         self.calls.append(url)
         if len(self.calls) == self.fail_at:
             raise c.Blocked("denied")
@@ -151,7 +151,7 @@ def test_shared_headers_cannot_contain_credentials(plan, monkeypatch):
 
 def test_scope_outage_is_blocked(plan):
     gate = Gate()
-    def fail(url):
+    def fail(url, method="GET"):
         raise c.HiveError("unavailable")
     gate.check = fail
     transport = Transport(plan)
@@ -236,14 +236,70 @@ def test_background_worker_mind_outage_persists_blocked_and_stages(plan, monkeyp
     directory.mkdir(parents=True)
     path = directory / "plan.json"
     path.write_text(json.dumps(plan))
+    queued = c.new_state(plan)
+    queued["status"] = "queued"
+    c.private_write(directory / "result.json", json.dumps(queued))
     assert c.main(["run", str(path), "--job", job]) == 1
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "blocked" and output["publication"] == "staged"
     state = json.loads((directory / "result.json").read_text())
+    assert state["run_id"] == queued["run_id"]
     assert not state["observations"] and "SECRET_TOKEN" not in json.dumps(state)
     assert c.job_status(job)["finished"] is True
     assert c.main(["run", str(path), "--job", job]) == 2
     assert json.loads((directory / "result.json").read_text()) == state
+
+
+def test_status_reports_progress_and_pending_restoration(plan, monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "JOBS", tmp_path)
+    job = "c" * 32
+    directory = c.job_directory(job)
+    directory.mkdir()
+    state = c.new_state(plan)
+    state.update(cleanup="pending", manual_restoration_required=True)
+    state["observations"] = [{"step": "control_owner", "state": "received"},
+                             {"step": "attempt_write", "state": "attempted"}]
+    c.private_write(directory / "result.json", json.dumps(state))
+    result = c.job_status(job)
+    assert result["progress"] == {"attempted": 2, "received": 1, "requests_max": 6,
+                                  "last_step": "attempt_write", "last_step_state": "attempted"}
+    assert result["manual_restoration_required"] is True
+    assert not result["finished"]
+
+
+def test_worker_error_preserves_partial_journal_and_identity(plan, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(c, "JOBS", tmp_path / "jobs")
+    monkeypatch.setenv("HIVE_HANDLE", "lab")
+    monkeypatch.setenv("HIVE_TEAM_TAG", "test")
+    monkeypatch.setenv("EXCALIBULL_OUTBOX_DIR", str(tmp_path / "outbox"))
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def call(self, *args):
+            return {"items": []}
+    monkeypatch.setattr(c, "HiveClient", Client)
+    def interrupted(plan, gate, transport, save, *, state, cancelled=None):
+        state["observations"].append({"step": "attempt_write", "state": "attempted"})
+        state.update(cleanup="pending", manual_restoration_required=True)
+        save(state)
+        raise ValueError("PRIVATE_DETAILS")
+    monkeypatch.setattr(c, "execute", interrupted)
+    job = "d" * 32
+    directory = c.job_directory(job)
+    directory.mkdir(parents=True)
+    path = directory / "plan.json"
+    path.write_text(json.dumps(plan))
+    queued = c.new_state(plan)
+    queued["status"] = "queued"
+    c.private_write(directory / "result.json", json.dumps(queued))
+    assert c.main(["run", str(path), "--job", job]) == 1
+    state = json.loads((directory / "result.json").read_text())
+    assert state["run_id"] == queued["run_id"]
+    assert state["status"] == "failed" and len(state["observations"]) == 1
+    assert state["manual_restoration_required"] is True
+    assert "PRIVATE_DETAILS" not in json.dumps(state)
 
 
 def test_stage_recovery_checks_plan_hash_and_sends_no_traffic(plan, monkeypatch, tmp_path, capsys):

@@ -95,6 +95,13 @@ Perfil de escrita implementado e testado offline:
   confirmada vira `failed` + `manual_restoration_required`. O transporte ganhou
   `send` (PATCH/PUT) sem redirect/proxy/cookie.
 
+Melhoria de confiabilidade implementada: leitura de volta exige HTTP 200 e distingue
+marcador original de alterado; negação de escrita não equivale a objeto intacto.
+A obrigação de restauração é gravada antes do envio; bloqueio pré-envio não gera
+escrita de limpeza. Contexto do Mind identifica o método real, sem inferir permissão
+por método. Journal parcial preserva identidade/alertas em erros do worker;
+status/wait expõem progresso e necessidade de restauração sem mostrar credenciais.
+
 Pendente nesta etapa:
 
 - Perfis para papéis e fluxos com várias etapas (escalonamento de privilégio, troca
@@ -103,8 +110,11 @@ Pendente nesta etapa:
   escopo por URL, não por método; o operador cobre isso na política de efeitos).
 - Integração Burp após homologação dos contratos de captura/contexto; nenhuma
   expectativa de replay produtivo a partir da prova sintética atual.
-- Fila com prioridades, leases, cancelamento e retomada; concorrência somente
-  com limite global por programa e isolamento de contas/objetos.
+- Fila com prioridades, leases e retomada; concorrência somente com limite global
+  por programa e isolamento de contas/objetos. **Feito:** cancelamento cooperativo
+  (`cancel`, que preserva a limpeza obrigatória), detecção de worker morto
+  (`worker`/`stale`, `wait` retorna cedo) e listagem (`jobs`), em `tools/bgjobs.py`
+  compartilhado com o Vigia.
 - Política estruturada de automação, rate e headers no contrato Mind. Hoje o
   contexto tipado fornece escopo/revisão, mas não todos esses controles; o operador
   os revisa no plano. O executor não interpreta automaticamente regras em prosa.
@@ -120,7 +130,8 @@ O limite de tempo é verificado entre etapas e blocos de leitura. Operações
 bloqueantes de DNS, MCP ou socket podem exceder o prazo até retornarem/expirarem;
 não é um supervisor com prazo rígido. Processo encerrado pode deixar `queued` ou
 `running`; `wait` tem timeout e não reenvia testes. Reinício de teste é uma nova
-execução deliberada. Não há serviço permanente, scheduler ou cancelamento nesta versão.
+execução deliberada. Não há serviço permanente nem scheduler; o cancelamento é
+cooperativo (consultado entre passos), não interrompe uma requisição em curso.
 
 Estado em `.hive/carrasco/` é scratch privado; fatos do programa continuam no Mind.
 Arquivos versionados contêm somente código, testes e exemplos sintéticos. Execução

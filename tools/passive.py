@@ -269,6 +269,31 @@ def _run_source(name, fn, d, kind, ttl):
     return name, d, hosts, urls, status
 
 
+def collect(domains, workers=10, ttl=3600):
+    """Coleta todas as fontes de terceiros para os domínios (sem tocar o alvo).
+
+    Retorna (host_sources, urls, results): proveniência por host, URLs vistas e
+    uma linha (domínio, fonte, n_hosts, n_urls, status) por fonte consultada.
+    Não filtra escopo: o chamador decide quais hosts pertencem aos domínios.
+    """
+    tasks = []
+    for d in domains:
+        for name, fn in _HOST_SOURCES:
+            tasks.append((name, fn, d, "hosts"))
+        for name, fn in _URL_SOURCES:
+            tasks.append((name, fn, d, "urls"))
+    all_urls, results, host_sources = set(), [], {}
+    with _cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        futs = [ex.submit(_run_source, name, fn, d, kind, ttl) for (name, fn, d, kind) in tasks]
+        for fut in _cf.as_completed(futs):
+            name, d, hosts, urls, status = fut.result()
+            all_urls |= urls
+            for h in hosts:
+                host_sources.setdefault(h, set()).add(name)
+            results.append((d, name, len(hosts), len(urls), status))
+    return host_sources, all_urls, sorted(results)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("domains", nargs="+", help="domínios base (ex.: worldcoin.org world.org)")
@@ -289,27 +314,9 @@ def main():
         except ValueError as exc:
             ap.error(str(exc))
 
-    # Monta as tarefas (domínio × fonte) e roda em paralelo — antes era sequencial
-    # (~9 fontes × N domínios), o maior gargalo do passive.
-    tasks = []
-    for d in a.domains:
-        for name, fn in _HOST_SOURCES:
-            tasks.append((name, fn, d, "hosts"))
-        for name, fn in _URL_SOURCES:
-            tasks.append((name, fn, d, "urls"))
-
-    all_hosts, all_urls, results = set(), set(), []
-    host_sources = {}  # host -> {fontes que o reportaram}; proveniência por ativo
-    with _cf.ThreadPoolExecutor(max_workers=max(1, a.workers)) as ex:
-        futs = [ex.submit(_run_source, name, fn, d, kind, a.cache_ttl)
-                for (name, fn, d, kind) in tasks]
-        for fut in _cf.as_completed(futs):
-            name, d, hosts, urls, status = fut.result()
-            all_hosts |= hosts
-            all_urls |= urls
-            for h in hosts:
-                host_sources.setdefault(h, set()).add(name)
-            results.append((d, name, len(hosts), len(urls), status))
+    # Tarefas (domínio × fonte) em paralelo; host -> {fontes} preserva proveniência.
+    host_sources, all_urls, results = collect(a.domains, a.workers, a.cache_ttl)
+    all_hosts = set(host_sources)
 
     # ordena p/ saída determinística (paralelismo embaralha a ordem de chegada)
     report = [f"  {d:22} {name:14} {nh:5} hosts {nu:5} urls [{st}]"
